@@ -25,8 +25,8 @@ Open a [feature request](https://github.com/brgmaruks/cait-whisper/issues/new?te
 
 ### What We'd Love Help With
 
-- **macOS and Linux support** — this is the biggest gap. The core logic is platform-agnostic, but the hotkey system, ctypes calls, and batch scripts are Windows-specific.
-- **Test coverage** — unit tests for pure functions (dictionary matching, spoken punctuation, hallucination detection)
+- **macOS and Linux support** - this is the biggest gap. The core logic is platform-agnostic, but the hotkey system, ctypes calls, and batch scripts are Windows-specific.
+- **Test coverage** - unit tests for pure functions (dictionary matching, spoken punctuation, hallucination detection)
 - **New ASR engine integrations**
 - **Accessibility improvements**
 

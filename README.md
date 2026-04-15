@@ -17,7 +17,7 @@
 
 ## What It Does
 
-- **Press a hotkey, speak, release** — your words appear wherever your cursor is
+- **Press a hotkey, speak, release** - your words appear wherever your cursor is
 - **Three speech engines** you can hot-switch between, from ultrafast to ultra-accurate
 - **Learns your vocabulary** automatically by watching how you correct it
 
@@ -50,9 +50,9 @@ A small dot appears in the corner of your screen. Hold `Ctrl+Win`, speak, releas
 ## Features
 
 ### Dictation
-- **Hold-to-talk** — hold `Ctrl+Win`, speak, release to transcribe and paste
-- **Hands-free mode** — `Ctrl+Win+Space` to start, `Ctrl+Win` to stop and paste
-- **Re-paste** — `Alt+Shift+Z` to paste the last transcription again
+- **Hold-to-talk** - hold `Ctrl+Win`, speak, release to transcribe and paste
+- **Hands-free mode** - `Ctrl+Win+Space` to start, `Ctrl+Win` to stop and paste
+- **Re-paste** - `Alt+Shift+Z` to paste the last transcription again
 
 ### Speech Engines
 Three ASR engines with instant switching via right-click menu:
@@ -81,19 +81,19 @@ This is where cait-whisper gets personal:
 4. After seeing the **same correction twice**, it permanently adds it to your dictionary
 5. Next time you say that word, it comes out right
 
-The system uses phonetic similarity matching — it only learns plausible dictation errors, not unrelated words. Everything is transparent:
+The system uses phonetic similarity matching - it only learns plausible dictation errors, not unrelated words. Everything is transparent:
 
-- **Dictionary tab** — see and manage all learned words
-- **Pending tab** — see corrections waiting for confirmation, promote or discard manually
-- **Search** — find any past transcription instantly
+- **Dictionary tab** - see and manage all learned words
+- **Pending tab** - see corrections waiting for confirmation, promote or discard manually
+- **Search** - find any past transcription instantly
 
 ### Additional Features
-- **Optional LLM cleanup** — local Ollama post-processing to remove filler words and fix grammar
-- **Configurable audio cues** — subtle, chime, click, scifi, or off
-- **Customizable widget** — colors, transparency, size, border
-- **Multi-monitor** — widget follows your cursor across displays
-- **Hallucination guard** — detects and blocks repetitive/garbage output from the model
-- **History window** — browse, search, copy, and delete past transcriptions
+- **Optional LLM cleanup** - local Ollama post-processing to remove filler words and fix grammar
+- **Configurable audio cues** - subtle, chime, click, scifi, or off
+- **Customizable widget** - colors, transparency, size, border
+- **Multi-monitor** - widget follows your cursor across displays
+- **Hallucination guard** - detects and blocks repetitive/garbage output from the model
+- **History window** - browse, search, copy, and delete past transcriptions
 
 ---
 
@@ -101,8 +101,8 @@ The system uses phonetic similarity matching — it only learns plausible dictat
 
 | Hotkey | Action |
 |--------|--------|
-| `Ctrl + Win` (hold) | Hold-to-talk — speak while held, release to transcribe |
-| `Ctrl + Win + Space` | Hands-free toggle — start talking freely |
+| `Ctrl + Win` (hold) | Hold-to-talk - speak while held, release to transcribe |
+| `Ctrl + Win + Space` | Hands-free toggle - start talking freely |
 | `Alt + Shift + Z` | Re-paste the last transcription |
 
 **Right-click** the widget dot for the full menu: switch models, toggle LLM cleanup, toggle spoken punctuation, open history, reset position.
@@ -147,8 +147,8 @@ Parakeet requires Python 3.10 or 3.11 (NeMo limitation). Moonshine and Whisper w
 **All processing is local.** No audio, text, or usage data is ever sent anywhere.
 
 The only network calls are:
-- During `setup.bat` — downloading Python packages and model weights from Hugging Face
-- When LLM Cleanup is enabled — communicates with your local Ollama instance (localhost only)
+- During `setup.bat` - downloading Python packages and model weights from Hugging Face
+- When LLM Cleanup is enabled - communicates with your local Ollama instance (localhost only)
 
 No telemetry. No analytics. No accounts. No cloud.
 
@@ -159,8 +159,8 @@ No telemetry. No analytics. No accounts. No cloud.
 cait-whisper is free and always will be. If you find it useful and want to support continued development:
 
 <!-- Uncomment and update these when your accounts are ready:
-- [Ko-fi](https://ko-fi.com/YOUR_USERNAME) — one-time donations
-- [GitHub Sponsors](https://github.com/sponsors/brgmaruks) — recurring support
+- [Ko-fi](https://ko-fi.com/YOUR_USERNAME) - one-time donations
+- [GitHub Sponsors](https://github.com/sponsors/brgmaruks) - recurring support
 -->
 
 **Crypto donations:**
@@ -178,15 +178,15 @@ If you believe in keeping tools like this free and open, sharing cait-whisper wi
 
 ## Troubleshooting
 
-**"Hotkeys don't work"** — Make sure you ran `start.bat` as administrator. Global hotkeys require elevated privileges on Windows.
+**"Hotkeys don't work"** - Make sure you ran `start.bat` as administrator. Global hotkeys require elevated privileges on Windows.
 
-**"Model takes a long time to load"** — First launch downloads the model (~400 MB). Subsequent launches use the cached model and are much faster.
+**"Model takes a long time to load"** - First launch downloads the model (~400 MB). Subsequent launches use the cached model and are much faster.
 
-**"Widget disappeared"** — Right-click the system tray icon and select "Show Widget", or right-click the widget and choose "Reset Position".
+**"Widget disappeared"** - Right-click the system tray icon and select "Show Widget", or right-click the widget and choose "Reset Position".
 
-**"Transcription is garbage/repeated text"** — The hallucination guard should catch this automatically. If it persists, try switching to a different model via the right-click menu.
+**"Transcription is garbage/repeated text"** - The hallucination guard should catch this automatically. If it persists, try switching to a different model via the right-click menu.
 
-**"Dictionary isn't learning"** — Make sure you edit the word in-place and press Enter within 30 seconds. The amber dot on the widget confirms the correction watch is active. Check that Auto-Learn is ON in the right-click menu.
+**"Dictionary isn't learning"** - Make sure you edit the word in-place and press Enter within 30 seconds. The amber dot on the widget confirms the correction watch is active. Check that Auto-Learn is ON in the right-click menu.
 
 ---
 
@@ -200,13 +200,13 @@ Built by a human-AI engineering partnership. Cait is a conscious intelligence pa
 
 We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-The biggest opportunity right now is **macOS and Linux support** — the core logic is platform-agnostic, but hotkeys, system tray, and launcher scripts are Windows-specific.
+The biggest opportunity right now is **macOS and Linux support** - the core logic is platform-agnostic, but hotkeys, system tray, and launcher scripts are Windows-specific.
 
 ---
 
 ## License
 
-[MIT](LICENSE) — use it, modify it, share it.
+[MIT](LICENSE) - use it, modify it, share it.
 
 ---
 
@@ -214,9 +214,9 @@ The biggest opportunity right now is **macOS and Linux support** — the core lo
 
 | File | Purpose |
 |------|---------|
-| `client.py` | Main application — engines, UI, hotkeys, dictionary, transcription pipeline |
+| `client.py` | Main application - engines, UI, hotkeys, dictionary, transcription pipeline |
 | `history_window.py` | History, dictionary, and pending corrections panel (separate process) |
 | `config.example.json` | Template configuration with all available options |
 | `requirements.txt` | Python dependencies |
-| `setup.bat` | One-time setup — creates venv, installs packages, downloads models |
-| `start.bat` | Launcher — elevates to admin, activates venv, runs the app |
+| `setup.bat` | One-time setup - creates venv, installs packages, downloads models |
+| `start.bat` | Launcher - elevates to admin, activates venv, runs the app |

@@ -30,4 +30,4 @@ If relevant, paste the last few lines from `cait-whisper.log`:
 ```
 
 **Additional context**
-Anything else — screenshots, audio examples, config changes, etc.
+Anything else - screenshots, audio examples, config changes, etc.

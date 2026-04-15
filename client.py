@@ -125,6 +125,7 @@ AUDIO_CUE = cfg.get("audio_cue", "subtle")
 # Spoken punctuation — replace words like "period" / "new line" with symbols.
 # Toggled via right-click menu or config.json "spoken_punctuation": true/false.
 _spoken_punct: bool = cfg.get("spoken_punctuation", True)
+_auto_learn_enabled: bool = cfg.get("auto_learn", True)
 
 # Active engine / model — updated live when the user switches from the menu
 _current_engine = ENGINE
@@ -190,6 +191,7 @@ _CONFIDENCE_THRESHOLD = 2   # need N identical corrections before auto-learning
 _correction_original: str = ""    # the raw text that was just pasted
 _correction_active: bool = False  # True while we're watching for a correction
 _correction_watch_cancel_id = None  # after-id for the 30-s auto-cancel timer
+_correction_debounce: bool = False  # prevents multiple Enter presses from spawning parallel diffs
 
 
 def _ui_after(ms, func, *args):
@@ -243,13 +245,17 @@ def _load_dictionary():
         log.warning(f"Could not load dictionary: {e}")
 
 
+def _atomic_write(path: Path, data):
+    """Write JSON atomically via temp-file + rename to avoid half-written reads."""
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+
+
 def _save_dictionary():
     global _dict_mtime
     try:
-        _DICT_PATH.write_text(
-            json.dumps(_dictionary, indent=2, ensure_ascii=False, sort_keys=True),
-            encoding="utf-8",
-        )
+        _atomic_write(_DICT_PATH, dict(sorted(_dictionary.items())))
         _dict_mtime = _DICT_PATH.stat().st_mtime
     except Exception as e:
         log.warning(f"Could not save dictionary: {e}")
@@ -271,6 +277,9 @@ def _reload_dictionary_if_changed():
         pass
 
 
+_WORD_RE = re.compile(r"[\w'\u2019-]+")   # compiled once; matches words + apostrophes + hyphens
+
+
 def _apply_dictionary(text: str) -> str:
     """Replace words in text according to the personal dictionary (case-preserving)."""
     # Re-read from disk only if the file changed (mtime check)
@@ -284,12 +293,14 @@ def _apply_dictionary(text: str) -> str:
         repl = _dictionary.get(key)
         if repl is None:
             return word
-        # Try to preserve capitalisation: if original was Title-case, capitalise replacement
+        # Preserve capitalisation: ALL-CAPS → ALL-CAPS, Title → Title, lower → lower
+        if word.isupper():
+            return repl.upper()
         if word[0].isupper():
             return repl[0].upper() + repl[1:]
         return repl
 
-    return re.sub(r"[\w''-]+", _replace, text)
+    return _WORD_RE.sub(_replace, text)
 
 
 # ─── Spoken punctuation ───────────────────────────────────────────────────────
@@ -344,6 +355,11 @@ def _toggle_spoken_punctuation():
         _widget.root.after(0, _widget._rebuild_menu)
 
 
+# Punctuation characters to strip when comparing words for dictionary learning.
+# Includes smart quotes and dashes inserted by _apply_spoken_punctuation().
+_STRIP_PUNCT = str.maketrans("", "", ".,!?;:\"'\u201c\u201d\u2018\u2019\u2014\u2013\u2026()[]")
+
+
 def _words_sound_similar(a: str, b: str) -> bool:
     """Return True if two words are similar enough to be a plausible dictation correction.
 
@@ -356,7 +372,7 @@ def _words_sound_similar(a: str, b: str) -> bool:
     The confidence threshold (_CONFIDENCE_THRESHOLD = 2) is the real guard
     against accidental one-off corrections being promoted to the dictionary.
     """
-    a, b = a.lower().strip(".,!?;:"), b.lower().strip(".,!?;:")
+    a, b = a.lower().translate(_STRIP_PUNCT), b.lower().translate(_STRIP_PUNCT)
     if not a or not b or abs(len(a) - len(b)) > 3:
         return False
     return difflib.SequenceMatcher(None, a, b).ratio() >= 0.40
@@ -374,12 +390,19 @@ def _load_pending_corrections() -> dict[str, dict]:
 
 def _save_pending_corrections(pending: dict[str, dict]):
     try:
-        _PENDING_PATH.write_text(
-            json.dumps(pending, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        _atomic_write(_PENDING_PATH, pending)
     except Exception as e:
         log.warning(f"Could not save pending corrections: {e}")
+
+
+def _toggle_auto_learn():
+    """Toggle auto-learning on/off and persist to config."""
+    global _auto_learn_enabled
+    _auto_learn_enabled = not _auto_learn_enabled
+    _save_config_key("auto_learn", _auto_learn_enabled)
+    log.info(f"Auto-learning {'enabled' if _auto_learn_enabled else 'disabled'}")
+    if _widget:
+        _widget.root.after(0, _widget._rebuild_menu)
 
 
 def _start_correction_watch(original_text: str):
@@ -390,6 +413,8 @@ def _start_correction_watch(original_text: str):
     While armed the idle dot turns amber so the user can see the app is
     ready to learn.  The watch auto-cancels after 30 s if Enter is never pressed."""
     global _correction_original, _correction_active, _correction_watch_cancel_id
+    if not _auto_learn_enabled:
+        return
     _correction_original = original_text
     _correction_active = True
     log.info("[AutoDict] watching for corrections (press Enter to commit)")
@@ -427,9 +452,10 @@ def _on_enter_correction():
     4. Diff the corrected text against what we originally pasted and learn
        any word-level changes.
     """
-    global _correction_active, _correction_watch_cancel_id
-    if not _correction_active:
+    global _correction_active, _correction_watch_cancel_id, _correction_debounce
+    if not _correction_active or _correction_debounce:
         return
+    _correction_debounce = True
     _correction_active = False
     # Cancel the auto-timeout job now that Enter was pressed
     if _correction_watch_cancel_id is not None and _widget:
@@ -485,9 +511,11 @@ def _on_enter_correction():
 
     if not corrected or corrected == original:
         log.info("[AutoDict] no correction detected")
+        _correction_debounce = False
         return
 
     _diff_and_learn(original, corrected)
+    _correction_debounce = False
 
 
 def _diff_and_learn(original: str, corrected: str):
@@ -507,8 +535,8 @@ def _diff_and_learn(original: str, corrected: str):
         if tag == "replace":
             # Pair up replaced words 1:1
             for ow, cw in zip(orig_words[i1:i2], corr_words[j1:j2]):
-                ok = ow.lower().strip(".,!?;:")
-                ck = cw.lower().strip(".,!?;:")
+                ok = ow.lower().translate(_STRIP_PUNCT)
+                ck = cw.lower().translate(_STRIP_PUNCT)
                 if ok and ck and ok != ck:
                     candidates.append((ok, ck))
         # insert / delete — not a correction, skip
@@ -1582,6 +1610,12 @@ class StatusWidget:
             command=_toggle_spoken_punctuation,
         )
 
+        # ── Auto-learn toggle ─────────────────────────────────────────────────
+        m.add_command(
+            label="Auto-Learn: ON" if _auto_learn_enabled else "Auto-Learn: OFF",
+            command=_toggle_auto_learn,
+        )
+
         # ── LLM cleanup toggle ────────────────────────────────────────────────
         m.add_command(
             label="LLM Cleanup: ON" if _post_process else "LLM Cleanup: OFF",
@@ -1887,6 +1921,7 @@ def _transcribe_and_paste(frames: list):
         _last_transcription = final_text
         new_entry = {
             "text":   final_text,
+            "raw":    raw_text,   # original ASR output before dictionary/LLM
             "ts":     datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
             "engine": f"{_current_engine}/{_current_model}",
         }

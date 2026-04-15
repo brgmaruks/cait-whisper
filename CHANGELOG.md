@@ -2,6 +2,25 @@
 
 All notable changes to cait-whisper will be documented in this file.
 
+## [1.1.0] — 2026-04-16
+
+### Fixed
+- **Enter debounce** — rapid Enter presses no longer spawn parallel correction threads that double-count learned words
+- **Atomic JSON writes** — pending_corrections.json and dictionary.json now use temp-file + rename to prevent corruption
+- **Smart punctuation stripping** — dictionary learning now handles smart quotes, em dashes, and ellipsis inserted by spoken punctuation
+- **ALL-CAPS preservation** — dictionary replacement now preserves full-uppercase words (e.g., "KATE" → "CAIT", not "Cait")
+- **Dictionary regex** — word-matching pattern compiled once at module level instead of recompiled per call; fixed ambiguous character class
+
+### Added
+- **Raw ASR output in history** — history entries now include the original ASR output alongside the dictionary-applied text
+- **Auto-Learn toggle** — right-click menu item to pause/resume dictionary auto-learning (persisted in config.json)
+- **CI workflow** — GitHub Actions syntax check across Python 3.10, 3.11, and 3.13
+- **GitHub Discussions** — enabled for questions and feature discussions
+- **Competitor comparison** — README now includes feature comparison with Wispr Flow, SuperWhisper, and OpenWhispr
+- **Troubleshooting section** — README now covers common issues and fixes
+
+---
+
 ## [1.0.0] — 2026-04-15
 
 Initial public release.

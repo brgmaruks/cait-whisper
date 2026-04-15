@@ -23,6 +23,19 @@
 
 ---
 
+## Why cait-whisper?
+
+| | cait-whisper | Wispr Flow | SuperWhisper | OpenWhispr |
+|--|-------------|------------|--------------|------------|
+| **Price** | Free forever | $12-15/mo | $8.49/mo | Free (cloud upsell) |
+| **Privacy** | 100% local | Cloud | Local + cloud | Local + cloud |
+| **Word limits** | None | 2,000/week free | Unlimited (paid) | 2,000/week free |
+| **Auto-learn dictionary** | Yes (transparent) | Basic | No | Basic |
+| **Engines** | 3 (switchable) | 1 | 2 | 2 |
+| **Open source** | Yes (MIT) | No | No | Yes |
+
+---
+
 ## Quick Start
 
 ```bat
@@ -160,6 +173,20 @@ cait-whisper is free and always will be. If you find it useful and want to suppo
 *Donation links coming soon. Star the repo to stay updated.*
 
 If you believe in keeping tools like this free and open, sharing cait-whisper with someone who could use it is the best support of all.
+
+---
+
+## Troubleshooting
+
+**"Hotkeys don't work"** — Make sure you ran `start.bat` as administrator. Global hotkeys require elevated privileges on Windows.
+
+**"Model takes a long time to load"** — First launch downloads the model (~400 MB). Subsequent launches use the cached model and are much faster.
+
+**"Widget disappeared"** — Right-click the system tray icon and select "Show Widget", or right-click the widget and choose "Reset Position".
+
+**"Transcription is garbage/repeated text"** — The hallucination guard should catch this automatically. If it persists, try switching to a different model via the right-click menu.
+
+**"Dictionary isn't learning"** — Make sure you edit the word in-place and press Enter within 30 seconds. The amber dot on the widget confirms the correction watch is active. Check that Auto-Learn is ON in the right-click menu.
 
 ---
 

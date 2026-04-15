@@ -1,0 +1,22 @@
+{
+    "engine": "moonshine",
+    "moonshine_model": "moonshine/base",
+    "whisper_model": "large-v3-turbo",
+    "parakeet_model": "nvidia/parakeet-tdt-0.6b-v2",
+    "sample_rate": 16000,
+    "channels": 1,
+    "language": "en",
+    "post_process": false,
+    "ollama_model": "llama3.2:3b",
+    "appearance": {
+        "active_bg":           "#1A1A1C",
+        "active_border_color": "#CCCCCC",
+        "active_border_px":    2,
+        "active_alpha":        0.82,
+        "idle_color":          "#909090",
+        "idle_alpha":          0.64,
+        "idle_size":           24
+    },
+    "audio_cue": "subtle",
+    "spoken_punctuation": true
+}

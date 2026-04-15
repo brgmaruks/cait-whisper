@@ -1,0 +1,23 @@
+# cait-whisper — core dependencies
+# Install: pip install -r requirements.txt
+
+# ASR engines
+faster-whisper
+useful-moonshine-onnx
+tokenizers
+
+# Audio
+sounddevice
+soundfile
+numpy
+
+# Keyboard & clipboard
+keyboard
+pyperclip
+
+# System tray
+pystray
+Pillow
+
+# LLM cleanup (optional — only used when "LLM Cleanup: ON" is toggled)
+ollama

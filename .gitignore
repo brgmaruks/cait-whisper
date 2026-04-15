@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Virtual environment — each user runs setup.bat to create their own
+venv/
+env/
+.venv/
+
+# Runtime data — personal and machine-specific, not for sharing
+config.json
+history.json
+dictionary.json
+pending_corrections.json
+cait-whisper.log
+
+# Downloaded model weights (large, re-downloaded on first run)
+*.onnx
+*.ot
+models/
+model_cache/
+
+# Hugging Face / PyTorch caches
+.cache/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code (development tooling)
+.claude/

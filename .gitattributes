@@ -1,0 +1,9 @@
+# Ensure batch files keep Windows line endings on all platforms
+*.bat text eol=crlf
+
+# Python files use LF
+*.py text eol=lf
+
+# JSON/MD use LF
+*.json text eol=lf
+*.md text eol=lf

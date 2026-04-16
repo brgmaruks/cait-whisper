@@ -126,6 +126,7 @@ AUDIO_CUE = cfg.get("audio_cue", "subtle")
 # Toggled via right-click menu or config.json "spoken_punctuation": true/false.
 _spoken_punct: bool = cfg.get("spoken_punctuation", True)
 _auto_learn_enabled: bool = cfg.get("auto_learn", True)
+_command_mode: bool = cfg.get("command_mode", False)  # COMMAND vs PURE mode
 
 # Active engine / model — updated live when the user switches from the menu
 _current_engine = ENGINE
@@ -403,6 +404,21 @@ def _toggle_auto_learn():
     log.info(f"Auto-learning {'enabled' if _auto_learn_enabled else 'disabled'}")
     if _widget:
         _widget.root.after(0, _widget._rebuild_menu)
+
+
+def _toggle_command_mode():
+    """Toggle between PURE dictation and COMMAND mode.
+    PURE (default): every utterance is dictated verbatim (v1.x behaviour).
+    COMMAND: utterances are classified, commands are executed, text still
+    gets dictated when the classifier says it is not a command.
+    """
+    global _command_mode
+    _command_mode = not _command_mode
+    _save_config_key("command_mode", _command_mode)
+    log.info(f"Mode switched to {'COMMAND' if _command_mode else 'PURE'}")
+    if _widget:
+        _widget.root.after(0, _widget._rebuild_menu)
+        _widget.root.after(0, _widget._refresh_idle_color)
 
 
 def _start_correction_watch(original_text: str):
@@ -1616,6 +1632,12 @@ class StatusWidget:
             command=_toggle_auto_learn,
         )
 
+        # ── Mode toggle (PURE vs COMMAND) ─────────────────────────────────────
+        m.add_command(
+            label="Mode: COMMAND" if _command_mode else "Mode: PURE",
+            command=_toggle_command_mode,
+        )
+
         # ── LLM cleanup toggle ────────────────────────────────────────────────
         m.add_command(
             label="LLM Cleanup: ON" if _post_process else "LLM Cleanup: OFF",
@@ -1659,11 +1681,21 @@ class StatusWidget:
         self._anchor_y = y + self.root.winfo_height()
 
     def _refresh_idle_color(self):
-        """Re-apply idle dot colour — amber when correction-watch is active, dim otherwise.
-        Called whenever _correction_active changes so the dot updates immediately."""
+        """Re-apply idle dot colour based on current state.
+
+        Priority (highest wins):
+          1. correction watch armed  -> amber (#D4A060)
+          2. COMMAND mode active     -> cool blue (#6E9CC9)
+          3. default idle            -> configured _IDLE_COLOR
+        """
         if self._state != "idle":
             return
-        color = "#D4A060" if _correction_active else _IDLE_COLOR
+        if _correction_active:
+            color = "#D4A060"
+        elif _command_mode:
+            color = "#6E9CC9"
+        else:
+            color = _IDLE_COLOR
         self._dot.config(fg=color, bg=color)
         self.root.config(bg=color)
 
@@ -1916,8 +1948,45 @@ def _transcribe_and_paste(frames: list):
         if final_text != raw_text:
             log.info(f"Dictionary applied: {final_text!r}")
 
-        # ── Save to history ───────────────────────────────────────────────
+        # Declare once; used by both COMMAND mode branch and the normal paste path.
         global _last_transcription
+
+        # ── COMMAND mode: classify & execute ─────────────────────────────
+        # In PURE mode this block is skipped entirely (zero overhead).
+        # In COMMAND mode the utterance is routed through a hybrid regex+LLM
+        # classifier. Commands are executed directly; non-commands fall through
+        # to the normal paste path as dictation.
+        if _command_mode:
+            try:
+                import context as _ctx
+                import commands as _cmds
+                field_ctx = _ctx.get_field_context()
+                cmd = _cmds.classify(final_text, has_selection=field_ctx.has_selection)
+                if cmd is not None:
+                    log.info(f"[Mode=COMMAND] classified as {cmd.type} (conf={cmd.confidence:.2f})")
+                    # Save to history so the user can see what they said
+                    _last_transcription = final_text
+                    new_entry = {
+                        "text":   f"[CMD:{cmd.type}] {final_text}",
+                        "raw":    raw_text,
+                        "ts":     datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        "engine": f"{_current_engine}/{_current_model}",
+                    }
+                    threading.Thread(target=_save_history, args=(new_entry,),
+                                     daemon=True, name="save-history").start()
+                    # Execute; commands handle their own pasting/keyboard ops
+                    ok = _cmds.execute(cmd, selection_text=field_ctx.selection, kb=keyboard)
+                    if ok:
+                        log.info(f"[Mode=COMMAND] ✓ executed ({time.perf_counter() - t0:.2f}s)")
+                        if _widget:
+                            _widget.set_state("done")
+                        return
+                    else:
+                        log.warning(f"[Mode=COMMAND] execution failed; falling through to dictation")
+            except Exception as e:
+                log.warning(f"[Mode=COMMAND] classifier error; falling through to dictation: {e}")
+
+        # ── Save to history ───────────────────────────────────────────────
         _last_transcription = final_text
         new_entry = {
             "text":   final_text,
@@ -1934,10 +2003,10 @@ def _transcribe_and_paste(frames: list):
         keyboard.send("ctrl+v")
         log.info(f"✓ Pasted ({time.perf_counter() - t0:.2f}s total)")
 
-        # ── Arm correction watcher — waits for Enter to diff and learn ────
+        # ── Arm correction watcher - waits for Enter to diff and learn ────
         # Pass final_text (what was actually pasted), not raw_text.
         # The user sees and edits final_text, so the diff must compare
-        # against that — not the pre-dictionary ASR output.
+        # against that - not the pre-dictionary ASR output.
         _start_correction_watch(final_text)
 
         if _widget:

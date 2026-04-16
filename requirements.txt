@@ -19,5 +19,9 @@ pyperclip
 pystray
 Pillow
 
-# LLM cleanup (optional — only used when "LLM Cleanup: ON" is toggled)
+# LLM cleanup (optional - only used when "LLM Cleanup: ON" is toggled)
+# Also used by COMMAND mode for the voice-command classifier fallback
 ollama
+
+# UI Automation for selection / context detection (used by COMMAND mode)
+pywinauto

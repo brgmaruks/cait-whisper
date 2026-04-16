@@ -18,5 +18,7 @@
         "idle_size":           24
     },
     "audio_cue": "subtle",
-    "spoken_punctuation": true
+    "spoken_punctuation": true,
+    "command_mode": false,
+    "auto_learn": true
 }

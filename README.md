@@ -87,6 +87,41 @@ The system uses phonetic similarity matching - it only learns plausible dictatio
 - **Pending tab** - see corrections waiting for confirmation, promote or discard manually
 - **Search** - find any past transcription instantly
 
+### Voice Commands (v2.0)
+
+cait-whisper has two modes, toggled from the right-click menu:
+
+- **PURE** (default): every utterance is dictated verbatim. This is the v1.x behavior.
+- **COMMAND**: utterances are classified. Commands execute, normal speech still dictates.
+
+When COMMAND mode is on, the widget dot turns a subtle blue so you always know which mode you're in.
+
+**Commands that work anywhere:**
+
+| Say | It does |
+|-----|---------|
+| "new paragraph" | Inserts a paragraph break |
+| "new line" | Inserts a line break |
+| "delete the last sentence" | Deletes back to the start of the line |
+| "delete the last word" | Deletes the previous word |
+| "capitalize that" | Capitalizes the last word |
+| "clear the field" | Selects all and deletes |
+| "undo that" | Ctrl+Z |
+
+**Commands that work on selected text** (select first, then speak):
+
+| Say | It does |
+|-----|---------|
+| "make this more formal" | Rewrites selection in formal tone |
+| "make this more casual" | Rewrites selection in casual tone |
+| "shorten this" | Rewrites selection more concisely |
+| "expand this" | Rewrites selection with more detail |
+| "summarize this" | Replaces selection with a summary |
+
+Selection-based commands use your local Ollama instance (same as LLM Cleanup). If Ollama isn't running, those commands gracefully fall back to dictation.
+
+Anything the classifier isn't confident about gets pasted as dictation, same as PURE mode. Your regular dictation experience never gets hijacked.
+
 ### Additional Features
 - **Optional LLM cleanup** - local Ollama post-processing to remove filler words and fix grammar
 - **Configurable audio cues** - subtle, chime, click, scifi, or off

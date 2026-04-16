@@ -2,6 +2,29 @@
 
 All notable changes to cait-whisper will be documented in this file.
 
+## [2.0.0] - 2026-04-16
+
+### Added
+- **COMMAND mode** - new right-click menu toggle. In COMMAND mode, utterances are classified as dictation or commands. PURE mode (default) preserves v1.x behavior exactly.
+- **Voice commands** - say "new paragraph", "delete the last sentence", "capitalize that", "clear the field", "undo that", and more. Regex fast-path for common commands (zero latency), local LLM fallback for natural variations.
+- **Selection-aware rewriting** - select any text, then say "make this more formal", "shorten this", "expand this", or "summarize this". The selection gets rewritten in place via local Ollama.
+- **Active window detection** - cait-whisper now knows which app has focus, used by the classifier to route commands appropriately.
+- **Visual mode indicator** - the widget dot turns a subtle blue when in COMMAND mode.
+- **`context.py`** - new module for Windows UI Automation and ctypes-based context detection. Degrades gracefully when pywinauto is unavailable.
+- **`commands.py`** - new module housing the hybrid regex+LLM classifier and the command executor.
+- **`ROADMAP.md`** - public roadmap for v2.x showing what's in progress, planned, and being considered.
+
+### Changed
+- `requirements.txt` now lists `pywinauto` for UI Automation support (used only in COMMAND mode).
+- `config.example.json` has a new `command_mode: false` key. Existing configs still work; the key is optional and defaults to false.
+
+### Safety and backward compatibility
+- PURE mode is bit-identical to v1.1 behavior. No regressions for existing workflows.
+- If the classifier is uncertain, the utterance is pasted as dictation rather than acted on. Confidence threshold is 0.7.
+- If Ollama isn't running, LLM-based commands fail gracefully and fall back to dictation.
+
+---
+
 ## [1.1.0] - 2026-04-16
 
 ### Fixed

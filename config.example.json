@@ -21,5 +21,6 @@
     "spoken_punctuation": true,
     "command_mode": false,
     "auto_learn": true,
-    "two_pass": true
+    "two_pass": true,
+    "use_screen_context": false
 }

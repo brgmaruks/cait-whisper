@@ -25,3 +25,8 @@ ollama
 
 # UI Automation for selection / context detection (used by COMMAND mode)
 pywinauto
+
+# Local OCR for screen-context capture (v2.3).
+# Only loaded when "Screen Context: ON" is toggled in COMMAND mode.
+# ~50 MB install. Comment this line out if you don't want the feature.
+rapidocr-onnxruntime

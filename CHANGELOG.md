@@ -2,6 +2,27 @@
 
 All notable changes to cait-whisper will be documented in this file.
 
+## [2.3.0] - 2026-04-16
+
+### Added
+- **Screen-context capture** - in COMMAND mode, cait-whisper can OCR the region around the cursor and feed the text to the LLM classifier as context. Enables utterances like "write an approving comment but ask about test coverage" while looking at a PR.
+- **"Screen Context: ON/OFF" toggle** - right-click menu item. Default OFF, explicit opt-in.
+- **`use_screen_context: false`** config key.
+- **`context.capture_screen_context()`** - one-shot helper: cursor position -> screen region -> OCR text. Uses `PIL.ImageGrab` (already installed) and `rapidocr-onnxruntime` (new optional dependency).
+- **`context.get_cursor_pos()`**, **`context.capture_screen_region()`**, **`context.ocr_image()`** - lower-level helpers.
+
+### Technical notes
+- RapidOCR is imported lazily (cached after first use). If `rapidocr-onnxruntime` isn't installed, screen context silently degrades to empty-string and the LLM classifier runs normally.
+- OCR latency is typically 30-80 ms on CPU, negligible next to the LLM call it augments.
+- Screen context is only captured when COMMAND mode is ON and the user has enabled the toggle. PURE mode is completely unaffected.
+- Maximum captured text is clipped to 1500 chars to preserve prompt budget on small local models.
+
+### Privacy
+- All OCR runs locally via ONNX. No images, no screenshots, no text leaves the machine.
+- Captured region is centered on the cursor (700x400 default) so background apps aren't scraped.
+
+---
+
 ## [2.2.0] - 2026-04-16
 
 ### Added

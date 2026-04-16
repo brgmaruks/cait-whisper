@@ -106,11 +106,17 @@ Rules:
 - Selection-based commands (rewrite_*, summarize_selection) require a selection; if unclear, set confidence lower.
 
 Selection present: {has_selection}
+{screen_context_block}
 Utterance: {utterance}"""
 
 
-def _llm_classify(utterance: str, has_selection: bool) -> Optional[Command]:
-    """Call Ollama to classify the utterance. Returns None on any failure."""
+def _llm_classify(utterance: str, has_selection: bool, screen_context: str = "") -> Optional[Command]:
+    """Call Ollama to classify the utterance. Returns None on any failure.
+
+    Optional `screen_context` (OCR text from around the cursor, v2.3) is
+    appended to the prompt so the model can reason about what the user is
+    looking at. Empty string disables screen-context augmentation.
+    """
     try:
         # Imported lazily so cait-whisper still imports if ollama isn't installed
         import ollama  # type: ignore
@@ -123,8 +129,19 @@ def _llm_classify(utterance: str, has_selection: bool) -> Optional[Command]:
     except Exception:
         OLLAMA_MODEL = "llama3.2:3b"
 
+    # Build the optional screen-context block. Kept small to avoid blowing
+    # the prompt budget on low-end models.
+    if screen_context.strip():
+        screen_block = (
+            "SCREEN CONTEXT (what the user is looking at, via OCR):\n"
+            f"{screen_context.strip()[:1500]}\n"
+        )
+    else:
+        screen_block = ""
+
     prompt = COMMAND_PROMPT.format(
         has_selection="yes" if has_selection else "no",
+        screen_context_block=screen_block,
         utterance=utterance.strip(),
     )
     try:
@@ -160,13 +177,15 @@ def _llm_classify(utterance: str, has_selection: bool) -> Optional[Command]:
 _CONFIDENCE_THRESHOLD = 0.7
 
 
-def classify(utterance: str, has_selection: bool = False) -> Optional[Command]:
+def classify(utterance: str, has_selection: bool = False, screen_context: str = "") -> Optional[Command]:
     """Return a Command if `utterance` is a voice command, else None.
 
     Algorithm:
       1. If selection exists, check selection-regex table first.
       2. Try general regex fast-path.
       3. Call LLM fallback for ambiguous utterances (short, no regex match).
+         If `screen_context` is provided (v2.3), it augments the LLM prompt
+         with OCR text from around the cursor.
       4. Apply confidence threshold.
     """
     text = utterance.strip()
@@ -194,7 +213,7 @@ def classify(utterance: str, has_selection: bool = False) -> Optional[Command]:
     # 3. LLM fallback for ambiguous short utterances
     if too_long_for_command:
         return None
-    cmd = _llm_classify(text, has_selection)
+    cmd = _llm_classify(text, has_selection, screen_context=screen_context)
     if cmd is None:
         return None
     if cmd.confidence < _CONFIDENCE_THRESHOLD:

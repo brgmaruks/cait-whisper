@@ -187,6 +187,100 @@ def capture_context() -> Context:
     )
 
 
+# ── Screen-context capture (v2.3) ──────────────────────────────────────────
+# OCR the region around the user's cursor so the LLM classifier can factor
+# in "what the user is looking at" when deciding how to handle an utterance.
+# RapidOCR is imported lazily so users who don't enable screen context never
+# pay the install cost.
+
+_ocr_engine = None           # cached RapidOCR instance (lazy-loaded)
+_ocr_available: Optional[bool] = None  # tri-state: None = untried, True/False = result
+
+
+def _get_ocr():
+    """Return a cached RapidOCR engine, or None if the package isn't installed."""
+    global _ocr_engine, _ocr_available
+    if _ocr_available is False:
+        return None
+    if _ocr_engine is not None:
+        return _ocr_engine
+    try:
+        from rapidocr_onnxruntime import RapidOCR  # type: ignore
+        _ocr_engine = RapidOCR()
+        _ocr_available = True
+        log.info("[Context] RapidOCR loaded for screen-context capture")
+        return _ocr_engine
+    except Exception as e:
+        log.warning(f"[Context] RapidOCR unavailable (install rapidocr-onnxruntime): {e}")
+        _ocr_available = False
+        return None
+
+
+def get_cursor_pos() -> Optional[tuple[int, int]]:
+    """Return the current cursor position as (x, y), or None on failure."""
+    try:
+        class _POINT(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+        pt = _POINT()
+        if _user32.GetCursorPos(ctypes.byref(pt)):
+            return (pt.x, pt.y)
+    except Exception as e:
+        log.debug(f"[Context] get_cursor_pos failed: {e}")
+    return None
+
+
+def capture_screen_region(center_x: int, center_y: int,
+                          width: int = 700, height: int = 400):
+    """Grab a PIL Image of a rectangle centered on (center_x, center_y).
+    Clips to screen bounds. Returns None on failure."""
+    try:
+        from PIL import ImageGrab  # type: ignore
+        left   = max(0, center_x - width // 2)
+        top    = max(0, center_y - height // 2)
+        right  = left + width
+        bottom = top + height
+        return ImageGrab.grab(bbox=(left, top, right, bottom))
+    except Exception as e:
+        log.debug(f"[Context] capture_screen_region failed: {e}")
+        return None
+
+
+def ocr_image(pil_image) -> str:
+    """Run OCR on a PIL image and return the extracted text. Empty string
+    on failure (package missing, image invalid, etc.)."""
+    if pil_image is None:
+        return ""
+    engine = _get_ocr()
+    if engine is None:
+        return ""
+    try:
+        import numpy as np  # type: ignore
+        arr = np.array(pil_image)
+        result, _ = engine(arr)
+        if not result:
+            return ""
+        lines = [item[1] for item in result if item and len(item) > 1]
+        return "\n".join(lines)
+    except Exception as e:
+        log.warning(f"[Context] ocr_image failed: {e}")
+        return ""
+
+
+def capture_screen_context(max_chars: int = 2000) -> str:
+    """One-shot: cursor -> screen region -> OCR text. Returns "" on failure
+    (including when RapidOCR isn't installed)."""
+    pos = get_cursor_pos()
+    if pos is None:
+        return ""
+    image = capture_screen_region(pos[0], pos[1])
+    if image is None:
+        return ""
+    text = ocr_image(image).strip()
+    if len(text) > max_chars:
+        text = text[:max_chars] + "…"
+    return text
+
+
 # ── Self-test when run directly ───────────────────────────────────────────
 if __name__ == "__main__":
     import json

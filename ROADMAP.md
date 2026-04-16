@@ -44,11 +44,11 @@ Moonshine's latency for everything that came out right. Whisper's accuracy for e
 
 ## v2.3 - Screen-Context Capture
 
-**Status:** Planned
+**Status:** Shipped (2026-04-16)
 
-In COMMAND mode, before running an LLM command, cait-whisper can OCR the region near your cursor and feed it to the model as context. Look at a PR, say "write a short approving comment but ask about test coverage". The model actually knows what the PR says.
+In COMMAND mode, cait-whisper can OCR the region near your cursor and feed the text to the LLM classifier as context. Look at a PR, say "write a short approving comment but ask about test coverage". The model actually knows what the PR says.
 
-Fully local OCR. No screenshots leave the machine.
+Fully local OCR via RapidOCR (ONNX). No images, no extracted text, no anything leaves the machine. Opt-in via right-click menu; requires the optional `rapidocr-onnxruntime` package (~50 MB).
 
 ---
 

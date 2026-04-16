@@ -127,6 +127,7 @@ AUDIO_CUE = cfg.get("audio_cue", "subtle")
 _spoken_punct: bool = cfg.get("spoken_punctuation", True)
 _auto_learn_enabled: bool = cfg.get("auto_learn", True)
 _command_mode: bool = cfg.get("command_mode", False)  # COMMAND vs PURE mode
+_use_screen_context: bool = cfg.get("use_screen_context", False)  # v2.3 OCR augmentation
 
 # Active engine / model — updated live when the user switches from the menu
 _current_engine = ENGINE
@@ -419,6 +420,19 @@ def _toggle_command_mode():
     if _widget:
         _widget.root.after(0, _widget._rebuild_menu)
         _widget.root.after(0, _widget._refresh_idle_color)
+
+
+def _toggle_screen_context():
+    """Toggle screen-context OCR on/off and persist to config.
+    When ON, the LLM command classifier receives OCR text from around the
+    cursor as additional context. Fully local via RapidOCR. No-op in PURE
+    mode. No-op if rapidocr-onnxruntime is not installed."""
+    global _use_screen_context
+    _use_screen_context = not _use_screen_context
+    _save_config_key("use_screen_context", _use_screen_context)
+    log.info(f"Screen-context {'enabled' if _use_screen_context else 'disabled'}")
+    if _widget:
+        _widget.root.after(0, _widget._rebuild_menu)
 
 
 def _toggle_two_pass():
@@ -1744,6 +1758,12 @@ class StatusWidget:
             command=_toggle_two_pass,
         )
 
+        # ── Screen-context OCR toggle (v2.3) ──────────────────────────────────
+        m.add_command(
+            label="Screen Context: ON" if _use_screen_context else "Screen Context: OFF",
+            command=_toggle_screen_context,
+        )
+
         # ── LLM cleanup toggle ────────────────────────────────────────────────
         m.add_command(
             label="LLM Cleanup: ON" if _post_process else "LLM Cleanup: OFF",
@@ -2129,7 +2149,22 @@ def _transcribe_and_paste(frames: list):
                 import context as _ctx
                 import commands as _cmds
                 field_ctx = _ctx.get_field_context()
-                cmd = _cmds.classify(final_text, has_selection=field_ctx.has_selection)
+                # v2.3: capture screen OCR context when enabled. Only runs
+                # when COMMAND mode is on and user has opted in. Fully local.
+                screen_ctx = ""
+                if _use_screen_context:
+                    try:
+                        t_ocr = time.perf_counter()
+                        screen_ctx = _ctx.capture_screen_context()
+                        if screen_ctx:
+                            log.info(f"[ScreenContext] captured {len(screen_ctx)} chars in {time.perf_counter() - t_ocr:.2f}s")
+                    except Exception as e:
+                        log.debug(f"[ScreenContext] capture failed: {e}")
+                cmd = _cmds.classify(
+                    final_text,
+                    has_selection=field_ctx.has_selection,
+                    screen_context=screen_ctx,
+                )
                 if cmd is not None:
                     log.info(f"[Mode=COMMAND] classified as {cmd.type} (conf={cmd.confidence:.2f})")
                     # Save to history so the user can see what they said

@@ -87,6 +87,16 @@ The system uses phonetic similarity matching - it only learns plausible dictatio
 - **Pending tab** - see corrections waiting for confirmation, promote or discard manually
 - **Search** - find any past transcription instantly
 
+### Screen Context (v2.3)
+
+In COMMAND mode, cait-whisper can OCR a region around your cursor before running an LLM command. The model then knows what you're actually looking at.
+
+Look at a PR, say "write a short approving comment but ask about test coverage". The model sees the PR content (via local OCR) and writes a relevant comment.
+
+**How to enable:** right-click the widget, choose "Screen Context: ON". Requires the optional `rapidocr-onnxruntime` package (about 50 MB). If the package isn't installed, the toggle is a silent no-op.
+
+**Privacy:** OCR runs entirely on your machine. Images and extracted text never leave your computer. No cloud calls, no telemetry.
+
 ### Retroactive Capture (v2.2)
 
 For the "wait, I just said something useful" moments. cait-whisper keeps a rolling 20-second buffer of audio at all times. Press `Ctrl + Win + B` and the last ~15 seconds get transcribed and pasted, same as any other dictation.

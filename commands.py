@@ -90,7 +90,7 @@ class Command:
 COMMAND_PROMPT = """You classify voice utterances from a dictation app as either a COMMAND (to execute) or DICTATION (text to type verbatim).
 
 Reply ONLY with JSON matching this schema:
-{"is_command": true|false, "type": "<command_id>"|"", "confidence": 0.0-1.0, "reasoning": "<brief>"}
+{{"is_command": true|false, "type": "<command_id>"|"", "confidence": 0.0-1.0, "reasoning": "<brief>"}}
 
 Known command IDs:
 - new_paragraph, new_line

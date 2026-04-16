@@ -2,6 +2,20 @@
 
 All notable changes to cait-whisper will be documented in this file.
 
+## [2.3.1] - 2026-04-16
+
+### Fixed
+- **Command classifier LLM fallback crashed with KeyError** - `COMMAND_PROMPT` contained literal `{"is_command": ...}` JSON which Python's `str.format()` misread as a placeholder. Any utterance that missed the regex fast-path (e.g. "rewrite this formally" without a selection) would trigger the LLM path and raise `KeyError: '"is_command"'`. Escaped the literal braces with `{{` `}}`. Caught during smoke testing before any user hit it in the wild.
+
+### Smoke test coverage
+- 34/34 classifier test cases pass (regex fast-path + edge cases + dictation false-positive checks).
+- 8/8 two-pass toast-logic cases pass (identical, normalized-equal, minor typo filtered, meaningful diff flagged, empty-safe).
+- `context.get_active_window()` verified against real foreground process.
+- `context.capture_screen_region()` + RapidOCR end-to-end verified: ~2 s first-call (ONNX init), subsequent calls fast.
+- Known limitation confirmed: `get_field_context()` returns empty for apps that don't expose UI Automation text pattern (e.g. Electron apps). Graceful fallback means selection-based commands simply don't fire, which is the safe default.
+
+---
+
 ## [2.3.0] - 2026-04-16
 
 ### Added

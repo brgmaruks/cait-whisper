@@ -421,6 +421,25 @@ def _toggle_command_mode():
         _widget.root.after(0, _widget._refresh_idle_color)
 
 
+def _toggle_two_pass():
+    """Toggle two-pass transcription on/off and persist to config.
+    When turning ON, loads the background engine lazily if not already loaded.
+    When turning OFF, the reference is dropped so GC can reclaim the memory."""
+    global _two_pass_enabled, _bg_asr_model
+    _two_pass_enabled = not _two_pass_enabled
+    _save_config_key("two_pass", _two_pass_enabled)
+    log.info(f"Two-pass {'enabled' if _two_pass_enabled else 'disabled'}")
+    if _two_pass_enabled and _bg_asr_model is None:
+        # Load lazily in background
+        threading.Thread(target=_load_bg_asr, daemon=True, name="bg-model-load").start()
+    elif not _two_pass_enabled:
+        with _bg_asr_lock:
+            _bg_asr_model = None
+        log.info("[TwoPass] background engine reference released")
+    if _widget:
+        _widget.root.after(0, _widget._rebuild_menu)
+
+
 def _start_correction_watch(original_text: str):
     """Arm the correction watcher.  After paste, we remember the original
     transcription and wait for the user to press Enter, which signals
@@ -881,6 +900,19 @@ _asr_model = None
 # and transcription threads so we never call .transcribe() on a half-swapped object.
 _asr_lock  = threading.Lock()
 
+# ─── Two-pass transcription (v2.1) ────────────────────────────────────────────
+# When _two_pass_enabled and the primary engine is Moonshine, we also load a
+# second (more accurate) Whisper engine. After each paste, the background engine
+# re-transcribes the same audio. If the result differs meaningfully, the user
+# gets a toast and Alt+Shift+Z re-pastes the improved version.
+#
+# Using a SEPARATE engine instance with its own lock is deliberate: it means the
+# next recording is never blocked waiting on a background Whisper call, which is
+# the whole point of fast+slow two-pass.
+_bg_asr_model = None
+_bg_asr_lock  = threading.Lock()
+_two_pass_enabled: bool = cfg.get("two_pass", True)
+
 # ─── Transcription helper ─────────────────────────────────────────────────────
 
 def _run_asr(audio: np.ndarray) -> str:
@@ -889,6 +921,74 @@ def _run_asr(audio: np.ndarray) -> str:
         if _asr_model is None:
             return ""
         return _asr_model.transcribe(audio.flatten().astype(np.float32))
+
+
+# ─── Two-pass: background loader / runner / callback ──────────────────────
+
+def _load_bg_asr():
+    """Load the background Whisper engine for two-pass transcription.
+    Runs in its own daemon thread; never blocks startup. Skips silently if
+    two-pass is disabled or the primary engine is already Whisper / Parakeet
+    (in which case a second pass adds no value)."""
+    global _bg_asr_model
+    if not _two_pass_enabled:
+        log.info("[TwoPass] disabled in config; skipping background load")
+        return
+    if _current_engine != "moonshine":
+        log.info(f"[TwoPass] primary engine is {_current_engine}; no background pass needed")
+        return
+    try:
+        t0 = time.perf_counter()
+        log.info(f"[TwoPass] loading background Whisper ({WHISPER_MODEL})...")
+        engine = _WhisperEngine(WHISPER_MODEL)
+        with _bg_asr_lock:
+            _bg_asr_model = engine
+        log.info(f"[TwoPass] background Whisper ready in {time.perf_counter() - t0:.1f}s")
+    except Exception as e:
+        log.warning(f"[TwoPass] failed to load background engine: {e}")
+
+
+def _run_bg_asr(audio_flat: np.ndarray, original_text: str):
+    """Re-transcribe audio on the background engine. Called from a daemon thread
+    after the main paste has already happened, so we are never on the hot path."""
+    if _bg_asr_model is None or not _two_pass_enabled:
+        return
+    try:
+        with _bg_asr_lock:
+            if _bg_asr_model is None:
+                return
+            t0 = time.perf_counter()
+            bg_text = _bg_asr_model.transcribe(audio_flat).strip()
+            log.info(f"[TwoPass] bg ASR in {time.perf_counter() - t0:.2f}s: {bg_text!r}")
+        _on_better_transcription(bg_text, original_text)
+    except Exception as e:
+        log.warning(f"[TwoPass] background ASR failed: {e}")
+
+
+def _on_better_transcription(bg_text: str, original_text: str):
+    """Compare the background result with the fast-pasted original. If the
+    background version is meaningfully better, update _last_transcription and
+    show a toast so the user can re-paste via Alt+Shift+Z."""
+    if not bg_text:
+        return
+    if bg_text == original_text:
+        return
+    # Normalize for comparison: lowercase + strip punctuation
+    norm_bg   = re.sub(r"[^\w\s]", "", bg_text).lower().strip()
+    norm_orig = re.sub(r"[^\w\s]", "", original_text).lower().strip()
+    if norm_bg == norm_orig:
+        log.info("[TwoPass] bg text identical after normalization; no update")
+        return
+    ratio = difflib.SequenceMatcher(None, bg_text, original_text).ratio()
+    if ratio >= 0.90:
+        log.info(f"[TwoPass] bg similar (ratio={ratio:.2f}); skipping toast")
+        return
+    log.info(f"[TwoPass] better transcription available (ratio={ratio:.2f})")
+    # Update _last_transcription so Alt+Shift+Z pastes the improved version
+    global _last_transcription
+    _last_transcription = bg_text
+    if _widget:
+        _ui_after(0, _widget._notify_bg_transcription, bg_text)
 
 
 # ─── Audio cues ───────────────────────────────────────────────────────────────
@@ -1638,6 +1738,12 @@ class StatusWidget:
             command=_toggle_command_mode,
         )
 
+        # ── Two-pass transcription toggle ─────────────────────────────────────
+        m.add_command(
+            label="Two-Pass: ON" if _two_pass_enabled else "Two-Pass: OFF",
+            command=_toggle_two_pass,
+        )
+
         # ── LLM cleanup toggle ────────────────────────────────────────────────
         m.add_command(
             label="LLM Cleanup: ON" if _post_process else "LLM Cleanup: OFF",
@@ -1724,6 +1830,24 @@ class StatusWidget:
             )
             toast.place(relx=0.5, rely=0.5, anchor="center")
             self.root.after(2800, toast.destroy)
+        except Exception:
+            pass
+
+    def _notify_bg_transcription(self, bg_text: str):
+        """Toast that the background engine produced a better transcription.
+        Stays visible a bit longer (4 seconds) because the user needs to
+        decide whether to press Alt+Shift+Z to swap the pasted text."""
+        try:
+            preview = (bg_text[:40] + "…") if len(bg_text) > 40 else bg_text
+            toast = tk.Label(
+                self._inner,
+                text=f"✨ Better version available · Alt+Shift+Z\n{preview}",
+                bg="#1C1F2A", fg="#90B8E8",
+                font=("Segoe UI", 8), padx=6, pady=2,
+                justify="center",
+            )
+            toast.place(relx=0.5, rely=0.5, anchor="center")
+            self.root.after(4000, toast.destroy)
         except Exception:
             pass
 
@@ -2008,6 +2132,17 @@ def _transcribe_and_paste(frames: list):
         # The user sees and edits final_text, so the diff must compare
         # against that - not the pre-dictionary ASR output.
         _start_correction_watch(final_text)
+
+        # ── Two-pass: kick off higher-accuracy background transcription ──
+        # Only makes sense when the primary engine is Moonshine (the fast one).
+        # For Whisper or Parakeet, there's nothing to improve on.
+        if _two_pass_enabled and _bg_asr_model is not None and _current_engine == "moonshine":
+            threading.Thread(
+                target=_run_bg_asr,
+                args=(audio_flat, final_text),
+                daemon=True,
+                name="bg-asr",
+            ).start()
 
         if _widget:
             _widget.set_state("done")   # auto-returns to idle after ~900 ms
@@ -2339,6 +2474,13 @@ def main():
         _ui_after(0, _on_ready)
 
     threading.Thread(target=_load_model_bg, daemon=True, name="model-load").start()
+
+    # ── Load background two-pass engine if enabled ────────────────────────────
+    # Kicks off in its own daemon thread so the main UI is not blocked.
+    # Silently no-ops when two-pass is disabled or the primary engine already
+    # is a higher-accuracy model.
+    threading.Thread(target=_load_bg_asr, daemon=True, name="bg-model-load").start()
+
     log.info("startup: entering main loop (model loading in background)")
 
     # ── Tkinter mainloop ──────────────────────────────────────────────────────

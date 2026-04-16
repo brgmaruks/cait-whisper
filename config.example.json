@@ -20,5 +20,6 @@
     "audio_cue": "subtle",
     "spoken_punctuation": true,
     "command_mode": false,
-    "auto_learn": true
+    "auto_learn": true,
+    "two_pass": true
 }

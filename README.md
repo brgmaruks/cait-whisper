@@ -87,6 +87,14 @@ The system uses phonetic similarity matching - it only learns plausible dictatio
 - **Pending tab** - see corrections waiting for confirmation, promote or discard manually
 - **Search** - find any past transcription instantly
 
+### Two-Pass Transcription (v2.1)
+
+When Moonshine is your primary engine, cait-whisper now loads Whisper in the background too. Every transcription takes the fast path (Moonshine pastes instantly) and is then re-transcribed on Whisper in the background. If the more accurate result differs meaningfully from what was already pasted, a toast appears with a preview. Press `Alt+Shift+Z` to replace the paste with the better version.
+
+You get Moonshine's latency for everything that came out right, and Whisper's accuracy for everything that didn't. No mode switch required.
+
+**Cost:** holding both engines in memory uses roughly an extra 1.5 GB of RAM. Disable from the right-click menu or set `"two_pass": false` in `config.json` if your machine is tight on memory.
+
 ### Voice Commands (v2.0)
 
 cait-whisper has two modes, toggled from the right-click menu:

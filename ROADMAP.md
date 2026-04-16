@@ -10,7 +10,7 @@ Transform cait-whisper from a dictation tool into a **voice interface for Window
 
 ## v2.0 - Voice Commands + Selection-Aware Mode
 
-**Status:** In progress
+**Status:** Shipped (2026-04-16)
 
 The product gains a second mode. In COMMAND mode, you can do more than dictate.
 
@@ -26,11 +26,11 @@ The demo: select a paragraph, say "make this less formal", watch it rewrite. No 
 
 ## v2.1 - Two-Pass Transcription
 
-**Status:** Planned
+**Status:** Shipped (2026-04-16)
 
-The fastest engine pastes instantly. The most accurate engine runs in the background on the same audio. If the slower pass produces a meaningfully better result, you get a toast with a one-keystroke option to swap it in.
+The fastest engine pastes instantly. The most accurate engine runs in the background on the same audio. If the slower pass produces a meaningfully better result, you get a toast with a one-keystroke option (`Alt+Shift+Z`) to swap it in.
 
-This gives you Moonshine's latency and Whisper's accuracy without compromise. Every existing user benefits without learning anything new.
+Moonshine's latency for everything that came out right. Whisper's accuracy for everything that didn't. No mode switch required.
 
 ---
 

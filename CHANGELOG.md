@@ -2,6 +2,21 @@
 
 All notable changes to cait-whisper will be documented in this file.
 
+## [2.1.0] - 2026-04-16
+
+### Added
+- **Two-pass transcription** - when Moonshine is the primary engine, Whisper loads alongside it in the background. After each paste, Whisper re-transcribes the same audio on its own thread. If the result differs meaningfully, a toast appears and `Alt+Shift+Z` re-pastes the improved version.
+- **Two-Pass menu toggle** - right-click menu item to enable/disable two-pass without editing config. Toggling OFF drops the background engine reference so GC can reclaim RAM.
+- **`two_pass: true`** config key (default on when primary engine is Moonshine).
+
+### Technical notes
+- Background engine uses its own lock (`_bg_asr_lock`) and model reference (`_bg_asr_model`). This is intentional - using the main `_asr_lock` would block the next recording waiting on Whisper, which defeats the purpose.
+- `_on_better_transcription()` filters out trivial differences (same text after lowercase + punct strip, or SequenceMatcher ratio >= 0.90). Only meaningfully-different results trigger a toast.
+- Memory: ~1.5 GB extra RAM when both engines are loaded. Single-engine memory footprint is unchanged.
+- When the primary engine is switched to Whisper or Parakeet, two-pass is a no-op (no value in running a second pass on a higher-accuracy primary).
+
+---
+
 ## [2.0.0] - 2026-04-16
 
 ### Added

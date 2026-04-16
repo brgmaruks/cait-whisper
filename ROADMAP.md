@@ -36,9 +36,9 @@ Moonshine's latency for everything that came out right. Whisper's accuracy for e
 
 ## v2.2 - Retroactive Capture
 
-**Status:** Planned
+**Status:** Shipped (2026-04-16)
 
-A new hotkey that grabs the **last 15 seconds** of audio and transcribes it. For the "wait, I just said something useful" moments. Always-on rolling buffer, minimal memory cost, zero change to existing workflows.
+`Ctrl+Win+B` grabs the **last ~15 seconds** of audio and transcribes it. For the "wait, I just said something useful" moments. Always-on rolling buffer (~1.3 MB resident), zero change to existing workflows. Retroactive captures run through the full pipeline: spoken punctuation, dictionary, auto-learn, two-pass.
 
 ---
 

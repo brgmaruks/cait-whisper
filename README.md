@@ -87,6 +87,12 @@ The system uses phonetic similarity matching - it only learns plausible dictatio
 - **Pending tab** - see corrections waiting for confirmation, promote or discard manually
 - **Search** - find any past transcription instantly
 
+### Retroactive Capture (v2.2)
+
+For the "wait, I just said something useful" moments. cait-whisper keeps a rolling 20-second buffer of audio at all times. Press `Ctrl + Win + B` and the last ~15 seconds get transcribed and pasted, same as any other dictation.
+
+The rolling buffer uses about 1.3 MB of RAM, runs regardless of whether you're recording, and never leaves your machine.
+
 ### Two-Pass Transcription (v2.1)
 
 When Moonshine is your primary engine, cait-whisper now loads Whisper in the background too. Every transcription takes the fast path (Moonshine pastes instantly) and is then re-transcribed on Whisper in the background. If the more accurate result differs meaningfully from what was already pasted, a toast appears with a preview. Press `Alt+Shift+Z` to replace the paste with the better version.
@@ -146,6 +152,7 @@ Anything the classifier isn't confident about gets pasted as dictation, same as 
 |--------|--------|
 | `Ctrl + Win` (hold) | Hold-to-talk - speak while held, release to transcribe |
 | `Ctrl + Win + Space` | Hands-free toggle - start talking freely |
+| `Ctrl + Win + B` | Retroactive capture - transcribe the last ~15 seconds |
 | `Alt + Shift + Z` | Re-paste the last transcription |
 
 **Right-click** the widget dot for the full menu: switch models, toggle LLM cleanup, toggle spoken punctuation, open history, reset position.

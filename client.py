@@ -1886,6 +1886,16 @@ _MAX_AUDIO_CHUNKS = int(5 * 60 * SAMPLE_RATE / 1024)
 _audio_frames: collections.deque = collections.deque(maxlen=_MAX_AUDIO_CHUNKS)
 _record_lock  = threading.Lock()
 
+# ── Retroactive capture (v2.2) ──────────────────────────────────────────
+# Always-on rolling buffer of the last ~20 seconds of audio. Independent of
+# the main recording buffer above so hands-free recording is unaffected.
+# Memory cost: 20 s * 16 kHz * 4 bytes (float32) ≈ 1.28 MB resident.
+_RETRO_BUFFER_SECS    = 20
+_RETRO_TRANSCRIBE_SECS = 15
+_RETRO_MAX_CHUNKS     = int(_RETRO_BUFFER_SECS * SAMPLE_RATE / 1024)
+_retro_frames: collections.deque = collections.deque(maxlen=_RETRO_MAX_CHUNKS)
+_retro_lock   = threading.Lock()
+
 _ctrl_down        = False
 _win_down         = False
 _space_down       = False
@@ -1968,6 +1978,10 @@ def _audio_callback(indata, frames, time_info, status):
     with _record_lock:
         if _recording:
             _audio_frames.append(indata.copy())
+        # Retroactive capture: always buffer a rolling window, even when idle.
+        # Tiny memory cost (~1.3 MB) in exchange for "grab the last 15 seconds".
+        with _retro_lock:
+            _retro_frames.append(indata.copy())
 
 # ─── Transcribe + paste ───────────────────────────────────────────────────────
 
@@ -1975,6 +1989,36 @@ def _show_no_speech():
     """Show flat-bar waveform briefly to indicate no speech was detected."""
     if _widget:
         _widget.set_state("no_speech")
+
+
+def _trigger_retro_capture():
+    """Retroactive capture (v2.2): transcribe the last ~15 seconds of audio
+    from the rolling buffer. Bound to Ctrl+Win+B. Refuses to fire while a
+    recording or transcription is already in progress."""
+    if _recording or _processing:
+        log.info("[Retro] ignored (recording/processing busy)")
+        return
+    with _retro_lock:
+        if not _retro_frames:
+            log.info("[Retro] buffer is empty")
+            return
+        frames_snapshot = list(_retro_frames)
+    # Trim to the most recent N seconds worth of chunks
+    max_chunks = int(_RETRO_TRANSCRIBE_SECS * SAMPLE_RATE / 1024)
+    if len(frames_snapshot) > max_chunks:
+        frames_snapshot = frames_snapshot[-max_chunks:]
+    secs = len(frames_snapshot) * 1024 / SAMPLE_RATE
+    log.info(f"[Retro] transcribing last ~{secs:.1f}s ({len(frames_snapshot)} chunks)")
+    if _widget:
+        _ui_after(0, lambda: _widget.set_state("processing"))
+    # Reuse the full transcription pipeline: ASR, spoken punct, LLM cleanup,
+    # dictionary, paste, correction watch, two-pass. Same as a normal recording.
+    threading.Thread(
+        target=_transcribe_and_paste,
+        args=(frames_snapshot,),
+        daemon=True,
+        name="retro-transcribe",
+    ).start()
 
 
 def _transcribe_and_paste(frames: list):
@@ -2246,7 +2290,7 @@ _TRACKED_KEYS = frozenset({
     "ctrl", "left ctrl", "right ctrl",
     "alt", "left alt", "right alt",
     "shift", "left shift", "right shift",
-    "enter", "z", "space",
+    "enter", "z", "b", "space",
     "windows", "left windows", "right windows",
 })
 
@@ -2275,6 +2319,13 @@ def _on_key_event(event):
         _z_down = down
         if down and keyboard.is_pressed("alt") and keyboard.is_pressed("shift"):
             threading.Thread(target=_repaste_last, daemon=True, name="repaste").start()
+            return
+
+    # ── Ctrl+Win+B — retroactive capture (last ~15 s) ────────────────────────
+    if key == "b":
+        if down and _ctrl_down and _win_down:
+            threading.Thread(target=_trigger_retro_capture,
+                             daemon=True, name="retro").start()
             return
 
     # ── Space key — detects Ctrl+Win+Space without suppress=True ──────────────

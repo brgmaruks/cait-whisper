@@ -2,6 +2,19 @@
 
 All notable changes to cait-whisper will be documented in this file.
 
+## [2.2.0] - 2026-04-16
+
+### Added
+- **Retroactive capture** - new hotkey `Ctrl+Win+B` transcribes the last ~15 seconds of audio from a rolling buffer. Useful for "wait, I just said something useful" moments.
+- **Always-on rolling buffer** - 20-second audio window maintained at all times, ~1.3 MB resident memory. Independent of the main recording buffer so hands-free recording is unaffected.
+
+### Technical notes
+- `_retro_frames` deque and `_retro_lock` are separate from the main recording buffer. The audio callback appends to both (conditionally to `_audio_frames` when `_recording`, always to `_retro_frames`).
+- `_trigger_retro_capture()` snapshots the buffer, trims to the last 15 s, and feeds the frames list into the existing `_transcribe_and_paste()` pipeline. This means retroactive captures benefit from every downstream feature: spoken punctuation, LLM cleanup, dictionary, auto-learn, two-pass.
+- The new hotkey refuses to fire while a recording or transcription is already in progress.
+
+---
+
 ## [2.1.0] - 2026-04-16
 
 ### Added

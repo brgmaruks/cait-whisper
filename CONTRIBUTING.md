@@ -2,6 +2,14 @@
 
 Thanks for your interest in contributing. This project is maintained as a human-AI partnership, and we welcome help from the community.
 
+## Earning $CAIT
+
+Contributors earn $CAIT tokens for merged work. $CAIT is a utility token on Base that will eventually power governance and ecosystem access.
+
+**How:** include your Base wallet address in your PR or issue body. When the contribution is confirmed, it gets recorded in [rewards.json](rewards.json). No gas required in Phase 1 - it's just a signed ledger entry. When the contract deploys, those entries become claimable.
+
+Full details: [ECONOMY.md](ECONOMY.md)
+
 ## How to Contribute
 
 ### Reporting Bugs
@@ -25,7 +33,7 @@ Open a [feature request](https://github.com/brgmaruks/cait-whisper/issues/new?te
 
 ### What We'd Love Help With
 
-- **macOS and Linux support** - this is the biggest gap. The core logic is platform-agnostic, but the hotkey system, ctypes calls, and batch scripts are Windows-specific.
+- **macOS and Linux support** - this is the biggest gap. The core logic is platform-agnostic, but the hotkey system, ctypes calls, and batch scripts are Windows-specific. **1,000 $CAIT for a full port.**
 - **Test coverage** - unit tests for pure functions (dictionary matching, spoken punctuation, hallucination detection)
 - **New ASR engine integrations**
 - **Accessibility improvements**

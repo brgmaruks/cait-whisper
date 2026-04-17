@@ -1,0 +1,17 @@
+{
+  "version": "1.0",
+  "token": "$CAIT",
+  "network": "Base",
+  "contract": null,
+  "note": "Pre-deploy ledger. Entries recorded here are claimable when the contract goes live.",
+  "distribution": {
+    "total_supply": 10000000,
+    "contributor_pool": 6000000,
+    "ecosystem_treasury": 2000000,
+    "liquidity": 2000000
+  },
+  "contributors": {},
+  "pending_claims": [],
+  "total_issued": 0,
+  "last_updated": "2026-04-17"
+}

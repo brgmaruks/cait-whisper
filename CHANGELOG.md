@@ -2,6 +2,69 @@
 
 All notable changes to cait-whisper will be documented in this file.
 
+## [2.4.0] - Unreleased (pending UAT sign-off)
+
+### Changed (breaking)
+- **Retroactive capture hotkey**: `Ctrl + Win + B` -> `Shift + Alt + R`. The previous combo conflicted with Intel graphics drivers and Lenovo Vantage on some systems. Shift+Alt+letter combos have no Windows global reservations.
+- **Mode switching**: new hotkey `Shift + Alt + M` toggles PURE / COMMAND without opening the right-click menu.
+
+### Added
+- **`summarize_screen` and `answer_from_screen` commands** (v2.3 follow-up). Say "summarize what you see" or "explain what you see" in COMMAND mode with Screen Context ON and cait-whisper OCRs the region near your cursor, sends the text to Ollama, and pastes the summary/explanation. Closes the gap in v2.3 where the OCR context was captured but nothing actually used it.
+- **Dev Logs toggle** (config key `dev_logs`, menu item, log level switches between INFO and DEBUG). When ON, verbose traces log every correction-watch decision, clipboard probe, classifier step, similarity check, and OCR call. Essential for diagnosing auto-dictionary issues.
+- **Hover status card** on the widget. Mouse over the dot and a small panel fades in showing engine, mode, and every feature's state. Move away and it disappears. Much better discoverability than the right-click menu alone.
+- **Amber pulse** when correction watch is armed. The dot now alternates between two amber shades every ~600ms instead of a static color, so peripheral vision catches it.
+- **Clearer mode indicator**: filled dot `●` for PURE, hollow ring `◎` for COMMAND, with brighter blue when COMMAND is active.
+- **View Log File** menu item opens `cait-whisper.log` in the user's default text handler.
+- **Full user documentation** in `docs/`: installation, getting-started, features, hotkeys, troubleshooting, faq, UAT.
+
+### Fixed
+- **COMMAND mode was slow between commands** because `context.get_field_context()` used pywinauto's `descendants()` which walks the entire UI tree. Replaced with `get_focus()` which is O(1). Added a 250ms hard timeout wrapper so even a pathological UI can't block the pipeline.
+
+### Changed (non-breaking)
+- **`setup.bat`** now uses `requirements.txt` (picks up new deps like `pywinauto` and `rapidocr-onnxruntime` automatically), offers to install Python via winget if missing, and offers to install Ollama via winget if the user opts in.
+
+### Technical notes
+- Dev-mode log traces are `log.debug()` calls, so they incur zero overhead when dev_logs is OFF.
+- The hover card is a Tkinter Toplevel that's destroyed on leave. No persistent memory footprint.
+- The amber pulse uses `root.after()` scheduling, cancellable when state changes. No thread spawned.
+
+---
+
+## [2.4.0] - 2026-04-18
+
+### Fixed (critical)
+- **Auto-dictionary was permanently broken** after any silent exception in the Enter handler. The `_correction_debounce` flag set at handler entry was only reset on specific success paths; any uncaught error or unusual code path left it stuck at True, blocking every subsequent correction for the rest of the session. Wrapped the handler body in try/finally so debounce ALWAYS resets. Also reset on arming.
+- **"new paragraph" voice command never fired** because the spoken-punctuation rule `"new paragraph" → "\n\n"` ran before the classifier and converted the command phrase to empty string. Added an early-path classifier that tries regex-based command matching on the raw ASR output BEFORE spoken-punctuation touches it.
+- **pywinauto `get_focus()` raised on every COMMAND-mode invocation** because that method doesn't exist on the Desktop class. Reverted to descendants() walk wrapped in the 250 ms timeout so slow UIs don't block the pipeline.
+- **Hover card mispositioned on multi-monitor setups** - used `winfo_screenwidth()` which returns primary-monitor-only dimensions, so on secondary monitors the card got clamped back to the primary edge. Switched to `GetSystemMetrics(SM_XVIRTUALSCREEN)` etc. for virtual screen bounds across all monitors.
+- **Widget snapped back to default position** after every manual drag because the 500 ms heartbeat re-anchored to the cursor's monitor's bottom-right. Added `_user_placed` flag; heartbeat skips auto-anchor once set. Drag position now persists to `config.json` and survives restart.
+- **Whisper initial-prompt-induced hallucination loops** when the personal dictionary got large enough that joining all values produced a long prompt. Capped to 12 words.
+- **Hallucination guard stripping vs discarding** - the v2.3.1 guard threw away the entire transcription if any part contained a loop. Now strips just the repeated region and preserves the legitimate prefix/suffix (e.g. 97 real words kept even when "Thank you." repeats 50 times at the end).
+
+### Added
+- **`Shift+Alt+C` one-shot COMMAND mode**: tap to record, tap to execute, auto-reverts to PURE. Replaces the old `Shift+Alt+M` sticky toggle as the primary command flow. Sticky toggle remains available in the right-click menu for power users.
+- **`Shift+Alt+R` retroactive capture** (renamed from the conflict-prone `Ctrl+Win+B`).
+- **Pending-correction toast**: every time the auto-dictionary spots a candidate but hasn't promoted yet, a small amber toast on the widget shows `📝 'kate' → 'cait' (1/2 · 1 more)`. The pending queue is no longer invisible.
+- **Hover status card** on the widget. Mouse-over the dot and a panel fades in showing engine, mode, and every feature's state. Hides instantly on cursor leave.
+- **Amber pulse** when correction watch is armed (was a static color, now alternates two shades every 600 ms so peripheral vision catches it).
+- **Distinct glyphs for modes**: filled dot `●` for PURE, hollow ring `◎` for COMMAND. Brighter blue shade when one-shot is armed.
+- **"View Log File" menu item** opens `cait-whisper.log` in the default text handler.
+- **"Dev Logs: ON/OFF" toggle** flips log level between INFO and DEBUG. Verbose traces in correction-watch, clipboard probe, classifier, similarity check, OCR paths.
+- **Model-switch sound**: quick audible confirmation when the ASR model finishes swapping.
+- **`summarize_screen` and `answer_from_screen` commands** closing the v2.3 screen-context gap. Say "summarize what you see" or "explain what you see" with Screen Context ON.
+- **`setup.bat` offers Python and Ollama via winget** if not already installed.
+- **`docs/` folder** with installation, getting-started, features, hotkeys, troubleshooting, faq, UAT.
+
+### Changed
+- `config.json` gains `dev_logs`, `widget_position` keys. Existing configs keep working.
+- Right-click menu label "Mode: PURE/COMMAND" → "Sticky COMMAND mode: ON/OFF" (clarifies that this is the persistent toggle, not the one-shot).
+
+### Still not fixed (rolled to v2.5)
+- LLM features (selection rewrite, screen-context commands) still require local Ollama and feel slow on modest hardware. v2.5 adds online provider support (OpenAI-compatible, covers Z.AI / Groq / Together / DeepSeek / self-hosted vLLM / Tailscale Ollama).
+- Multi-monitor hover card positioning deferred to v2.5 UAT (tester didn't have a second monitor during this round).
+
+---
+
 ## [2.3.1] - 2026-04-16
 
 ### Fixed

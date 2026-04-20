@@ -45,6 +45,10 @@ CMD_REWRITE_SHORTER = "rewrite_shorter"
 CMD_REWRITE_LONGER  = "rewrite_longer"
 CMD_SUMMARIZE       = "summarize_selection"
 
+# Screen-context commands (v2.4, require screen OCR context)
+CMD_SUMMARIZE_SCREEN = "summarize_screen"
+CMD_ANSWER_SCREEN    = "answer_from_screen"
+
 # ── Fast-path regex table ─────────────────────────────────────────────────
 # Ordered list of (compiled pattern, command_id). First match wins.
 # Patterns are anchored loosely (\b) so they fire on natural speech
@@ -71,6 +75,14 @@ _SELECTION_COMMANDS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\b(make\s+this|rewrite\s+this)\s+longer\b", re.I), CMD_REWRITE_LONGER),
     (re.compile(r"\bexpand\s+(this|that|on\s+this)\b", re.I), CMD_REWRITE_LONGER),
     (re.compile(r"\bsummarize\s+(this|that)\b", re.I), CMD_SUMMARIZE),
+]
+
+# Screen-context commands (only relevant when screen_context is non-empty).
+# Triggered when the user refers to "what you see / this page / the screen".
+_SCREEN_COMMANDS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"\bsummariz(e|ing)\s+(what\s+you\s+see|this\s+page|the\s+screen|this\s+screen)\b", re.I), CMD_SUMMARIZE_SCREEN),
+    (re.compile(r"\bwhat'?s\s+on\s+(the\s+|my\s+)?screen\b", re.I), CMD_SUMMARIZE_SCREEN),
+    (re.compile(r"\bexplain\s+(what\s+you\s+see|this\s+page|the\s+screen|this\s+screen)\b", re.I), CMD_ANSWER_SCREEN),
 ]
 
 
@@ -204,7 +216,16 @@ def classify(utterance: str, has_selection: bool = False, screen_context: str = 
                 log.info(f"[Commands] regex match (selection): {cmd_id} <- {text!r}")
                 return Command(type=cmd_id, confidence=0.95, source="regex", raw_text=utterance)
 
-    # 2. General regex fast-path
+    # 2. Screen-context regex (only if OCR actually produced something)
+    if screen_context.strip():
+        for pat, cmd_id in _SCREEN_COMMANDS:
+            if pat.search(text):
+                log.info(f"[Commands] regex match (screen): {cmd_id} <- {text!r}")
+                # Args carry the OCR text so the executor can use it
+                return Command(type=cmd_id, confidence=0.95, args=screen_context,
+                               source="regex", raw_text=utterance)
+
+    # 3. General regex fast-path
     for pat, cmd_id in _FAST_COMMANDS:
         if pat.match(text):
             log.info(f"[Commands] regex match: {cmd_id} <- {text!r}")
@@ -234,6 +255,8 @@ _REWRITE_PROMPTS = {
     CMD_REWRITE_SHORTER: "Rewrite the following text to be significantly shorter while preserving the key meaning. Output only the rewritten text:\n\n{text}",
     CMD_REWRITE_LONGER:  "Expand the following text with more detail while preserving the meaning and tone. Output only the expanded text:\n\n{text}",
     CMD_SUMMARIZE:       "Summarize the following text in one or two sentences. Output only the summary:\n\n{text}",
+    CMD_SUMMARIZE_SCREEN: "Summarize what is shown on the user's screen, based on the OCR text below. Be brief, one or two sentences. Output only the summary, no preamble:\n\nScreen text:\n{text}",
+    CMD_ANSWER_SCREEN:    "Explain clearly and briefly what is shown on the user's screen, based on the OCR text below. One short paragraph max. Output only the explanation, no preamble:\n\nScreen text:\n{text}",
 }
 
 
@@ -326,7 +349,25 @@ def execute(cmd: Command, selection_text: str = "", kb=None, paste_fn=None) -> b
             log.info("[Commands] retry is a caller-level action; returning True")
             return True
 
-        # ── Selection-based ops ──────────────────────────────────────
+        # ── Screen-context ops (input is OCR text from cmd.args) ──────
+        if t in (CMD_SUMMARIZE_SCREEN, CMD_ANSWER_SCREEN):
+            source_text = cmd.args.strip() if cmd.args else ""
+            if not source_text:
+                log.warning(f"[Commands] {t} needs screen OCR context but got nothing")
+                return False
+            new_text = _llm_rewrite(source_text, t)
+            if not new_text:
+                return False
+            if paste_fn:
+                paste_fn(new_text)
+            else:
+                import pyperclip  # type: ignore
+                pyperclip.copy(new_text)
+                time.sleep(0.05)
+                kb.send("ctrl+v")
+            return True
+
+        # ── Selection-based ops (input is highlighted text) ──────────
         if t in _REWRITE_PROMPTS:
             if not selection_text.strip():
                 log.warning(f"[Commands] {t} requires a selection but none provided")

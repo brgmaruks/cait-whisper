@@ -162,10 +162,25 @@ Anything the classifier isn't confident about gets pasted as dictation, same as 
 |--------|--------|
 | `Ctrl + Win` (hold) | Hold-to-talk - speak while held, release to transcribe |
 | `Ctrl + Win + Space` | Hands-free toggle - start talking freely |
-| `Ctrl + Win + B` | Retroactive capture - transcribe the last ~15 seconds |
-| `Alt + Shift + Z` | Re-paste the last transcription |
+| `Shift + Alt + R` | Retroactive capture - transcribe the last ~15 seconds |
+| `Shift + Alt + C` | One-shot COMMAND mode (tap, speak a command, tap, auto-reverts) |
+| `Shift + Alt + Z` | Re-paste the last transcription |
 
 **Right-click** the widget dot for the full menu: switch models, toggle LLM cleanup, toggle spoken punctuation, open history, reset position.
+
+---
+
+## Documentation
+
+Full user manual lives in [`docs/`](docs/):
+
+- [Installation](docs/installation.md) - step by step, with Ollama setup
+- [Getting Started](docs/getting-started.md) - five-minute walkthrough
+- [Features](docs/features.md) - complete reference for every feature
+- [Hotkeys](docs/hotkeys.md) - the full key reference
+- [Troubleshooting](docs/troubleshooting.md) - common issues and fixes
+- [FAQ](docs/faq.md) - common questions
+- [UAT](docs/UAT.md) - test script used before every release
 
 ---
 

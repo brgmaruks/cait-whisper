@@ -100,74 +100,98 @@ class FieldContext:
     has_selection: bool     # True when selection is non-empty
 
 
-def get_field_context(max_preceding: int = 200) -> FieldContext:
-    """Best-effort field context detection via UI Automation.
-
-    Returns an empty context (has_selection=False, strings empty) if
-    pywinauto is not installed or the focused control doesn't expose
-    a text pattern. Never raises.
-    """
+def _get_field_context_inner(max_preceding: int) -> FieldContext:
+    """Inner worker: walks the focused window's UI tree looking for the
+    element that has keyboard focus. We wrap this in a hard timeout in
+    the public `get_field_context()` so a slow UI (Chrome with many tabs,
+    complex Electron UIs) can never block the transcription pipeline."""
     empty = FieldContext(selection="", preceding="", has_selection=False)
     if not _HAS_PYWINAUTO:
         return empty
 
     try:
-        # Get the focused element through the UIA backend
-        focused = Desktop(backend="uia").get_active()  # top-level focused window
-        # Find the element with keyboard focus inside it
-        el = focused.element_info  # root; we'll drill in
-        try:
-            focused_el = focused.descendants(control_type=None)  # type: ignore[arg-type]
-        except Exception:
-            focused_el = []
-
-        # Walk visible descendants looking for keyboard focus
-        target = None
-        try:
-            for candidate in focused.descendants():
-                try:
-                    if candidate.has_keyboard_focus():
-                        target = candidate
-                        break
-                except Exception:
-                    continue
-        except Exception:
-            target = None
-
-        if target is None:
-            return empty
-
-        # Selection via get_selection() when available
-        selection_text = ""
-        try:
-            sel = target.get_selection()  # type: ignore[attr-defined]
-            if sel:
-                # Some controls return a list of ranges/strings
-                if isinstance(sel, (list, tuple)):
-                    selection_text = "".join(str(x) for x in sel if x)
-                else:
-                    selection_text = str(sel)
-        except Exception:
-            selection_text = ""
-
-        # Preceding text is harder; try texts() as a rough approximation
-        preceding_text = ""
-        try:
-            texts = target.texts()  # type: ignore[attr-defined]
-            if texts:
-                joined = "\n".join(t for t in texts if t)
-                preceding_text = joined[-max_preceding:]
-        except Exception:
-            preceding_text = ""
-
-        return FieldContext(
-            selection=selection_text,
-            preceding=preceding_text,
-            has_selection=bool(selection_text.strip()),
-        )
+        # Get the top-level focused window first
+        focused = Desktop(backend="uia").get_active()
     except Exception as e:
-        log.debug(f"[Context] get_field_context failed: {e}")
+        log.debug(f"[Context] get_active failed: {e}")
         return empty
+
+    # Walk its descendants looking for the element with keyboard focus.
+    # This IS O(tree size) but the timeout wrapper caps total time at 250ms.
+    target = None
+    try:
+        for candidate in focused.descendants():
+            try:
+                if candidate.has_keyboard_focus():
+                    target = candidate
+                    break
+            except Exception:
+                continue
+    except Exception as e:
+        log.debug(f"[Context] descendants walk failed: {e}")
+        return empty
+
+    if target is None:
+        return empty
+
+    # Selection via get_selection() when available
+    selection_text = ""
+    try:
+        sel = target.get_selection()  # type: ignore[attr-defined]
+        if sel:
+            if isinstance(sel, (list, tuple)):
+                selection_text = "".join(str(x) for x in sel if x)
+            else:
+                selection_text = str(sel)
+    except Exception:
+        selection_text = ""
+
+    # Preceding text via texts() as a rough approximation
+    preceding_text = ""
+    try:
+        texts = target.texts()  # type: ignore[attr-defined]
+        if texts:
+            joined = "\n".join(t for t in texts if t)
+            preceding_text = joined[-max_preceding:]
+    except Exception:
+        preceding_text = ""
+
+    return FieldContext(
+        selection=selection_text,
+        preceding=preceding_text,
+        has_selection=bool(selection_text.strip()),
+    )
+
+
+def get_field_context(max_preceding: int = 200, timeout: float = 0.25) -> FieldContext:
+    """Best-effort field context detection via UI Automation.
+
+    Runs the UIA query in a worker thread with a hard timeout so a slow
+    app (Chrome with many tabs, complex Electron UI) can never block the
+    transcription pipeline for more than `timeout` seconds.
+
+    Returns an empty context on any failure, including timeout. Never raises.
+    """
+    empty = FieldContext(selection="", preceding="", has_selection=False)
+    if not _HAS_PYWINAUTO:
+        return empty
+
+    result_box: list = [empty]
+
+    def _worker():
+        try:
+            result_box[0] = _get_field_context_inner(max_preceding)
+        except Exception as e:
+            log.debug(f"[Context] worker failed: {e}")
+
+    import threading
+    t = threading.Thread(target=_worker, daemon=True, name="uia-field-context")
+    t.start()
+    t.join(timeout=timeout)
+    if t.is_alive():
+        log.debug(f"[Context] get_field_context timed out after {timeout}s")
+        return empty
+    return result_box[0]
 
 
 # ── Convenience: one-shot context snapshot ────────────────────────────────

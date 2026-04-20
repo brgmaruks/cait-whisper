@@ -127,7 +127,16 @@ AUDIO_CUE = cfg.get("audio_cue", "subtle")
 _spoken_punct: bool = cfg.get("spoken_punctuation", True)
 _auto_learn_enabled: bool = cfg.get("auto_learn", True)
 _command_mode: bool = cfg.get("command_mode", False)  # COMMAND vs PURE mode
+_one_shot_command: bool = False   # transient: set by Shift+Alt+C, consumed on next transcription
 _use_screen_context: bool = cfg.get("use_screen_context", False)  # v2.3 OCR augmentation
+_dev_logs: bool = cfg.get("dev_logs", False)  # v2.4 verbose debug logging
+
+# Apply initial log level based on dev_logs setting.
+# When dev_logs is ON, the root logger emits DEBUG; individual log.debug()
+# calls throughout the code paint a full picture of what's happening.
+if _dev_logs:
+    logging.getLogger().setLevel(logging.DEBUG)
+    log.info("[DevLogs] verbose logging enabled (DEBUG level)")
 
 # Active engine / model — updated live when the user switches from the menu
 _current_engine = ENGINE
@@ -422,6 +431,20 @@ def _toggle_command_mode():
         _widget.root.after(0, _widget._refresh_idle_color)
 
 
+def _toggle_dev_logs():
+    """Toggle verbose DEBUG-level logging for diagnostics.
+    ON: every correction watch arm, clipboard probe, classifier decision,
+    dictionary substitution, OCR call, etc. is logged.
+    OFF: normal INFO-level logging (production default)."""
+    global _dev_logs
+    _dev_logs = not _dev_logs
+    _save_config_key("dev_logs", _dev_logs)
+    logging.getLogger().setLevel(logging.DEBUG if _dev_logs else logging.INFO)
+    log.info(f"Dev logs {'enabled (DEBUG)' if _dev_logs else 'disabled (INFO)'}")
+    if _widget:
+        _widget.root.after(0, _widget._rebuild_menu)
+
+
 def _toggle_screen_context():
     """Toggle screen-context OCR on/off and persist to config.
     When ON, the LLM command classifier receives OCR text from around the
@@ -461,12 +484,19 @@ def _start_correction_watch(original_text: str):
 
     While armed the idle dot turns amber so the user can see the app is
     ready to learn.  The watch auto-cancels after 30 s if Enter is never pressed."""
-    global _correction_original, _correction_active, _correction_watch_cancel_id
+    global _correction_original, _correction_active, _correction_watch_cancel_id, _correction_debounce
     if not _auto_learn_enabled:
+        log.debug("[AutoDict] watch NOT armed: auto-learn disabled")
         return
     _correction_original = original_text
     _correction_active = True
+    # Defensive: make sure a stale debounce from a previous cycle can't
+    # block the incoming Enter. The try/finally in _on_enter_correction
+    # should already handle this, but resetting here costs nothing.
+    _correction_debounce = False
     log.info("[AutoDict] watching for corrections (press Enter to commit)")
+    log.debug(f"[AutoDict] armed with original_text={original_text!r} "
+              f"(len={len(original_text)}, ts={time.time():.3f})")
 
     if _widget:
         # Amber dot — show the watch is armed
@@ -503,68 +533,90 @@ def _on_enter_correction():
     """
     global _correction_active, _correction_watch_cancel_id, _correction_debounce
     if not _correction_active or _correction_debounce:
+        log.debug(f"[AutoDict] Enter ignored: active={_correction_active}, debounce={_correction_debounce}")
         return
+    log.debug(f"[AutoDict] Enter handler fired (ts={time.time():.3f})")
     _correction_debounce = True
     _correction_active = False
-    # Cancel the auto-timeout job now that Enter was pressed
-    if _correction_watch_cancel_id is not None and _widget:
-        try:
-            _widget.root.after_cancel(_correction_watch_cancel_id)
-        except Exception:
-            pass
-        _correction_watch_cancel_id = None
-    # Revert amber dot immediately
-    if _widget:
-        _ui_after(0, _widget._refresh_idle_color)
-
-    original = _correction_original   # = final_text (what was actually pasted)
-    if not original:
-        return
-
-    # Give the Enter keypress a moment to land before reading the clipboard
-    time.sleep(0.15)
-
+    # Everything below runs inside try/finally so `_correction_debounce` is
+    # GUARANTEED to reset even if a downstream call raises. This was a real
+    # bug: a silent exception in _diff_and_learn or UI code left debounce=True
+    # permanently, bricking auto-dictionary for the rest of the session.
     try:
-        clipboard_now = pyperclip.paste().strip()
-    except Exception:
-        return
+        # Cancel the auto-timeout job now that Enter was pressed
+        if _correction_watch_cancel_id is not None and _widget:
+            try:
+                _widget.root.after_cancel(_correction_watch_cancel_id)
+            except Exception:
+                pass
+            _correction_watch_cancel_id = None
+        # Revert amber dot immediately
+        if _widget:
+            _ui_after(0, _widget._refresh_idle_color)
 
-    corrected = None
-
-    if clipboard_now and clipboard_now != original:
-        # User explicitly copied their corrected text — use it directly
-        corrected = clipboard_now
-        log.info("[AutoDict] correction found in clipboard")
-    else:
-        # Clipboard unchanged — user edited in-place without copying.
-        # Send Ctrl+A then Ctrl+C to grab the full current field content,
-        # then restore the clipboard so we don't clobber anything.
-        try:
-            keyboard.send("ctrl+a")
-            time.sleep(0.08)
-            keyboard.send("ctrl+c")
-            time.sleep(0.12)
-            corrected = pyperclip.paste().strip()
-            # Restore clipboard to what we originally pasted
-            pyperclip.copy(original)
-            log.info("[AutoDict] grabbed field content via Ctrl+A/Ctrl+C")
-            # Guard: if the grabbed text is > 3× longer than the original,
-            # Ctrl+A selected the whole document (email body, long note, etc.)
-            # rather than just the pasted sentence — discard and bail out.
-            if corrected and len(corrected.split()) > len(original.split()) * 3:
-                log.warning("[AutoDict] Ctrl+A grabbed too much context — skipping")
-                return
-        except Exception as e:
-            log.warning(f"[AutoDict] could not grab field content: {e}")
+        original = _correction_original   # = final_text (what was actually pasted)
+        if not original:
+            log.debug("[AutoDict] no original_text captured; nothing to diff against")
             return
 
-    if not corrected or corrected == original:
-        log.info("[AutoDict] no correction detected")
-        _correction_debounce = False
-        return
+        # Give the Enter keypress a moment to land before reading the clipboard
+        time.sleep(0.15)
 
-    _diff_and_learn(original, corrected)
-    _correction_debounce = False
+        try:
+            clipboard_now = pyperclip.paste().strip()
+            log.debug(f"[AutoDict] clipboard read: len={len(clipboard_now)}, "
+                      f"matches_original={clipboard_now == original!s}")
+        except Exception as e:
+            log.debug(f"[AutoDict] clipboard read failed: {e}")
+            return
+
+        corrected = None
+
+        if clipboard_now and clipboard_now != original:
+            # User explicitly copied their corrected text — use it directly
+            corrected = clipboard_now
+            log.info("[AutoDict] correction found in clipboard")
+        else:
+            # Clipboard unchanged — user edited in-place without copying.
+            # Send Ctrl+A then Ctrl+C to grab the full current field content,
+            # then restore the clipboard so we don't clobber anything.
+            log.debug("[AutoDict] clipboard unchanged; probing field via Ctrl+A/Ctrl+C")
+            try:
+                keyboard.send("ctrl+a")
+                time.sleep(0.08)
+                keyboard.send("ctrl+c")
+                time.sleep(0.12)
+                corrected = pyperclip.paste().strip()
+                log.debug(f"[AutoDict] Ctrl+A/Ctrl+C grab: len={len(corrected)}")
+                # Restore clipboard to what we originally pasted
+                pyperclip.copy(original)
+                log.info("[AutoDict] grabbed field content via Ctrl+A/Ctrl+C")
+                # Guard: if the grabbed text is > 3× longer than the original,
+                # Ctrl+A selected the whole document (email body, long note, etc.)
+                # rather than just the pasted sentence — discard and bail out.
+                if corrected and len(corrected.split()) > len(original.split()) * 3:
+                    log.warning(f"[AutoDict] Ctrl+A grabbed too much context "
+                                f"({len(corrected.split())} words vs {len(original.split())}) — skipping")
+                    return
+            except Exception as e:
+                log.warning(f"[AutoDict] could not grab field content: {e}")
+                return
+
+        if not corrected or corrected == original:
+            log.info("[AutoDict] no correction detected")
+            log.debug(f"[AutoDict] corrected={corrected!r} original={original!r}")
+            return
+
+        log.debug(f"[AutoDict] diff inputs: original={original!r}, corrected={corrected!r}")
+        try:
+            _diff_and_learn(original, corrected)
+        except Exception as e:
+            log.warning(f"[AutoDict] diff_and_learn raised: {e}")
+    finally:
+        # ALWAYS release the debounce flag. Without this, a silent exception
+        # bricks auto-dict for the rest of the session.
+        _correction_debounce = False
+        log.debug("[AutoDict] debounce released")
 
 
 def _diff_and_learn(original: str, corrected: str):
@@ -573,6 +625,7 @@ def _diff_and_learn(original: str, corrected: str):
     Each candidate must be seen _CONFIDENCE_THRESHOLD times before promotion."""
     orig_words = original.split()
     corr_words = corrected.split()
+    log.debug(f"[AutoDict] diff: {len(orig_words)} orig words, {len(corr_words)} corrected words")
 
     # Use SequenceMatcher for word-level alignment (handles insertions/deletions)
     sm = difflib.SequenceMatcher(None, orig_words, corr_words)
@@ -581,6 +634,7 @@ def _diff_and_learn(original: str, corrected: str):
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         if tag == "equal":
             continue
+        log.debug(f"[AutoDict] opcode={tag} orig[{i1}:{i2}]={orig_words[i1:i2]} corr[{j1}:{j2}]={corr_words[j1:j2]}")
         if tag == "replace":
             # Pair up replaced words 1:1
             for ow, cw in zip(orig_words[i1:i2], corr_words[j1:j2]):
@@ -589,6 +643,8 @@ def _diff_and_learn(original: str, corrected: str):
                 if ok and ck and ok != ck:
                     candidates.append((ok, ck))
         # insert / delete — not a correction, skip
+
+    log.debug(f"[AutoDict] {len(candidates)} candidate pair(s) before similarity gate")
 
     if not candidates:
         log.info("[AutoDict] diff found no word-level corrections")
@@ -599,7 +655,9 @@ def _diff_and_learn(original: str, corrected: str):
 
     for orig_w, corr_w in candidates:
         # Phonetic similarity gate — skip obviously unrelated words
-        if not _words_sound_similar(orig_w, corr_w):
+        sim_ok = _words_sound_similar(orig_w, corr_w)
+        log.debug(f"[AutoDict] similarity check '{orig_w}' vs '{corr_w}' -> {sim_ok}")
+        if not sim_ok:
             log.info(f"[AutoDict] skipping '{orig_w}' → '{corr_w}' (not similar)")
             continue
 
@@ -607,6 +665,7 @@ def _diff_and_learn(original: str, corrected: str):
         entry = pending.get(key, {"count": 0})
         entry["count"] += 1
         pending[key] = entry
+        log.debug(f"[AutoDict] pending key {key!r} now count={entry['count']}")
 
         if entry["count"] >= _CONFIDENCE_THRESHOLD:
             # Promote to dictionary
@@ -619,6 +678,11 @@ def _diff_and_learn(original: str, corrected: str):
             remaining = _CONFIDENCE_THRESHOLD - entry["count"]
             log.info(f"[AutoDict] pending: '{orig_w}' → '{corr_w}' "
                      f"(count={entry['count']}, need {remaining} more)")
+            # Toast so the user sees that we're tracking this correction
+            # and knows exactly how many more are needed.
+            if _widget:
+                _ui_after(0, _widget._notify_dict_pending,
+                          orig_w, corr_w, entry["count"], _CONFIDENCE_THRESHOLD)
 
     _save_pending_corrections(pending)
 
@@ -813,10 +877,20 @@ class _WhisperEngine:
         from faster_whisper import WhisperModel
         self._model = WhisperModel(model_name, device="cpu", compute_type="int8")
 
+    # Hard cap on the dictionary hint. Whisper can latch onto long
+    # initial_prompts and echo them back in long outputs, producing loops
+    # like "CaitOS qwen Stellantis Fenekie ..." repeated many times.
+    # 12 words is enough to bias recognition without dominating the prompt.
+    _MAX_HINT_WORDS = 12
+
     def transcribe(self, audio_1d: np.ndarray) -> str:
         audio = audio_1d.astype(np.float32)
-        # Build initial_prompt from dictionary entries to bias recognition
-        hint = " ".join(_dictionary.values()) if _dictionary else None
+        # Build initial_prompt from a small, capped slice of dictionary values
+        if _dictionary:
+            hint_words = list(_dictionary.values())[: self._MAX_HINT_WORDS]
+            hint = " ".join(hint_words)
+        else:
+            hint = None
         segments, _ = self._model.transcribe(
             audio,
             language=LANGUAGE,
@@ -1109,6 +1183,14 @@ def _switch_model(engine: str, model: str):
                          "parakeet": "parakeet_model"}.get(engine, "whisper_model")
             _save_config_keys({"engine": engine, model_key: model})
             log.info(f"✓ Model switched to {engine} ({model})")
+            # Audible confirmation so the user knows the swap completed
+            # (same "done" cue as transcription-ready). Runs on a daemon
+            # thread so we don't block the model-swap thread on audio IO.
+            threading.Thread(
+                target=lambda: _play_cue("done"),
+                daemon=True,
+                name="switch-cue",
+            ).start()
         except Exception as exc:
             err = str(exc)
             # Detect incomplete HuggingFace download (model.bin missing after interrupted fetch)
@@ -1293,6 +1375,19 @@ class StatusWidget:
         sh = self.root.winfo_screenheight()
         self._anchor_x = sw - 24
         self._anchor_y = sh - 60
+        # Respect a user-dragged position from a previous session, if any.
+        # Heartbeat's auto-anchor-to-cursor-monitor will skip while _user_placed
+        # is True, so the widget stays exactly where the user put it.
+        self._user_placed = False
+        saved_pos = cfg.get("widget_position")
+        if isinstance(saved_pos, dict) and "x" in saved_pos and "y" in saved_pos:
+            try:
+                self._anchor_x = int(saved_pos["x"])
+                self._anchor_y = int(saved_pos["y"])
+                self._user_placed = True
+                log.info(f"Widget: restored saved position ({self._anchor_x}, {self._anchor_y})")
+            except Exception:
+                pass
 
         # Idle dot (hidden when active)
         self._dot = tk.Label(self.root, text="◉", font=("Segoe UI", 13, "bold"),
@@ -1336,6 +1431,16 @@ class StatusWidget:
             w.bind("<ButtonPress-3>", self._show_menu)
             w.bind("<ButtonPress-1>", self._drag_start)
             w.bind("<B1-Motion>",     self._drag_move)
+            # Hover card: show after a short delay, hide when the cursor
+            # leaves both widget and card. Bound to the root and dot so
+            # the card doesn't appear mid-drag or during waveform display.
+            w.bind("<Enter>", self._on_widget_hover)
+            w.bind("<Leave>", self._on_widget_leave)
+
+        # Hover card state
+        self._hover_card = None
+        self._hover_show_job = None
+        self._hover_hide_job = None
 
         self._anim_job   = None
         self._bar_h        = [0.08] * _N_BARS   # smoothed bar heights 0..1
@@ -1387,7 +1492,13 @@ class StatusWidget:
 
     def _anchor_to_monitor(self):
         """Position the widget at the bottom-right of whichever monitor
-        the mouse cursor is on.  Called every 500 ms by the heartbeat."""
+        the mouse cursor is on.  Called every 500 ms by the heartbeat.
+
+        Skipped entirely when the user has manually dragged the widget.
+        Manual placement always wins until they explicitly reset position
+        via the right-click menu."""
+        if getattr(self, "_user_placed", False):
+            return
         area = _get_cursor_monitor_workarea()
         if area is None:
             return  # keep current position
@@ -1426,8 +1537,22 @@ class StatusWidget:
 
     def reset_position(self):
         """Move the widget back to the bottom-right of the primary monitor.
-        Called from the tray icon or when the widget is detected offscreen."""
+        Called from the tray icon or when the widget is detected offscreen.
+        Also clears the user-placed flag so the heartbeat resumes cursor-
+        following and removes the saved position from config."""
         try:
+            self._user_placed = False
+            try:
+                # Remove the saved position so next launch uses cursor monitor
+                with open(CONFIG_PATH) as f:
+                    data = json.load(f)
+                if "widget_position" in data:
+                    data.pop("widget_position", None)
+                    with open(CONFIG_PATH, "w") as f:
+                        json.dump(data, f, indent=4)
+                    log.info("Config: widget_position removed (reset_position)")
+            except Exception:
+                pass
             sw = self.root.winfo_screenwidth()
             sh = self.root.winfo_screenheight()
             self._anchor_x = sw - self._MARGIN_X
@@ -1732,6 +1857,7 @@ class StatusWidget:
 
         # ── History & Dictionary ──────────────────────────────────────────────
         m.add_command(label="History & Dictionary", command=_open_history_window)
+        m.add_command(label="View Log File", command=_open_log_file)
         m.add_separator()
 
         # ── Spoken punctuation toggle ─────────────────────────────────────────
@@ -1746,9 +1872,12 @@ class StatusWidget:
             command=_toggle_auto_learn,
         )
 
-        # ── Mode toggle (PURE vs COMMAND) ─────────────────────────────────────
+        # ── Sticky COMMAND mode toggle ───────────────────────────────────────
+        # The primary way to fire a command is Shift+Alt+C (one-shot).
+        # This toggle sets sticky mode for power users who want every utterance
+        # to be classified without pressing Shift+Alt+C each time.
         m.add_command(
-            label="Mode: COMMAND" if _command_mode else "Mode: PURE",
+            label="Sticky COMMAND mode: ON" if _command_mode else "Sticky COMMAND mode: OFF",
             command=_toggle_command_mode,
         )
 
@@ -1764,6 +1893,12 @@ class StatusWidget:
             command=_toggle_screen_context,
         )
 
+        # ── Dev logs toggle (v2.4) ────────────────────────────────────────────
+        m.add_command(
+            label="Dev Logs: ON" if _dev_logs else "Dev Logs: OFF",
+            command=_toggle_dev_logs,
+        )
+
         # ── LLM cleanup toggle ────────────────────────────────────────────────
         m.add_command(
             label="LLM Cleanup: ON" if _post_process else "LLM Cleanup: OFF",
@@ -1774,6 +1909,14 @@ class StatusWidget:
         m.add_command(label="Quit", command=_quit)
 
     def _show_menu(self, event):
+        # If the hover card is up, get rid of it immediately so the menu
+        # has the screen to itself. Also cancel any pending show job that
+        # would pop a card on top of the menu mid-click.
+        if self._hover_show_job is not None:
+            try: self.root.after_cancel(self._hover_show_job)
+            except Exception: pass
+            self._hover_show_job = None
+        self._hide_hover_card()
         # Always rebuild so checkmarks and LLM label are current
         self._rebuild_menu()
         self._menu.tk_popup(event.x_root, event.y_root)
@@ -1781,6 +1924,157 @@ class StatusWidget:
         # self._dot AND self.root fire _show_menu for the same click, the menu
         # opens twice in rapid succession and the first item-click gets eaten.
         return "break"
+
+    # ── Hover status card ─────────────────────────────────────────────────
+    # The card is a read-only status panel. There is nothing to click inside
+    # it, so we hide it instantly when the cursor leaves the widget. We also
+    # suppress it entirely while the right-click menu is open so the two UI
+    # elements never fight for screen space.
+    def _on_widget_hover(self, event):
+        # Cancel any pending show/hide jobs — fresh intent wins
+        if self._hover_hide_job is not None:
+            try: self.root.after_cancel(self._hover_hide_job)
+            except Exception: pass
+            self._hover_hide_job = None
+        # Do NOT show the card if the right-click menu is currently open
+        try:
+            if self._menu.winfo_ismapped():
+                return
+        except Exception:
+            pass
+        if self._hover_show_job is None and self._hover_card is None:
+            self._hover_show_job = self.root.after(500, self._show_hover_card)
+
+    def _on_widget_leave(self, event):
+        # Cancel pending show
+        if self._hover_show_job is not None:
+            try: self.root.after_cancel(self._hover_show_job)
+            except Exception: pass
+            self._hover_show_job = None
+        # Hide immediately; the card has no interactive elements so there's
+        # nothing to preserve via a grace period.
+        self._hide_hover_card()
+
+    def _show_hover_card(self):
+        """Build and display the hover card with current state."""
+        self._hover_show_job = None
+        if self._hover_card is not None:
+            return
+        # Double-check menu isn't open (could have opened during the delay)
+        try:
+            if self._menu.winfo_ismapped():
+                return
+        except Exception:
+            pass
+
+        lines = self._build_hover_lines()
+        card = tk.Toplevel(self.root)
+        card.overrideredirect(True)
+        card.attributes("-topmost", True)
+        try:
+            card.attributes("-alpha", 0.96)
+        except Exception:
+            pass
+        # Don't let the card steal focus or keyboard events
+        try:
+            card.attributes("-disabled", True)
+        except Exception:
+            pass
+
+        frame = tk.Frame(card, bg="#1A1A1C", padx=10, pady=8,
+                         highlightbackground="#444", highlightthickness=1)
+        frame.pack()
+
+        tk.Label(frame, text="cait-whisper", bg="#1A1A1C", fg="#CCCCCC",
+                 font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        for label, value in lines:
+            row = tk.Frame(frame, bg="#1A1A1C")
+            row.pack(anchor="w", fill="x", pady=1)
+            tk.Label(row, text=label, bg="#1A1A1C", fg="#888",
+                     font=("Segoe UI", 8), width=14, anchor="w").pack(side="left")
+            tk.Label(row, text=value, bg="#1A1A1C", fg="#DDDDDD",
+                     font=("Segoe UI", 8)).pack(side="left", anchor="w")
+
+        # Position: directly ABOVE the widget with a generous buffer so the
+        # cursor travel path from any content above down to the dot is never
+        # blocked by the card. Fall back to BELOW only if above would clip
+        # the top of the virtual screen.
+        #
+        # Critical: use winfo_rootx/rooty, NOT winfo_x/winfo_y. On a Toplevel
+        # created with overrideredirect(True) under Windows, winfo_x may
+        # return parent-relative coordinates (often 0) rather than screen
+        # coordinates. rootx/rooty are always absolute screen coordinates.
+        #
+        # Also: use the VIRTUAL SCREEN bounds (all monitors combined), not
+        # winfo_screenwidth which reports only the primary monitor. Without
+        # this, a widget dragged to a secondary monitor has its hover card
+        # yanked back to the primary monitor edge.
+        card.update_idletasks()
+        card_w = card.winfo_width()
+        card_h = card.winfo_height()
+        widget_x = self.root.winfo_rootx()
+        widget_y = self.root.winfo_rooty()
+        widget_w = self.root.winfo_width()
+        widget_h = self.root.winfo_height()
+
+        try:
+            gm = ctypes.windll.user32.GetSystemMetrics
+            virt_x = gm(76)   # SM_XVIRTUALSCREEN   (left-most monitor origin)
+            virt_y = gm(77)   # SM_YVIRTUALSCREEN
+            virt_w = gm(78)   # SM_CXVIRTUALSCREEN  (total width across all monitors)
+            virt_h = gm(79)   # SM_CYVIRTUALSCREEN  (total height)
+        except Exception:
+            # Fallback to primary-only metrics if ctypes call fails
+            virt_x = 0
+            virt_y = 0
+            virt_w = self.root.winfo_screenwidth()
+            virt_h = self.root.winfo_screenheight()
+
+        # Horizontal: center the card on the widget, clamped to virtual screen
+        x = widget_x + (widget_w // 2) - (card_w // 2)
+        x = max(virt_x + 8, min(x, virt_x + virt_w - card_w - 8))
+
+        # Vertical: prefer ABOVE the widget with a 12 px gap. Fallback to BELOW.
+        y = widget_y - card_h - 12
+        if y < virt_y + 8:
+            y = widget_y + widget_h + 12
+        y = min(y, virt_y + virt_h - card_h - 8)
+
+        card.geometry(f"+{x}+{y}")
+        self._hover_card = card
+
+    def _hide_hover_card(self):
+        self._hover_hide_job = None
+        if self._hover_card is not None:
+            try:
+                self._hover_card.destroy()
+            except Exception:
+                pass
+            self._hover_card = None
+
+    def _build_hover_lines(self):
+        """Produce the rows shown in the hover card."""
+        rows = []
+        rows.append(("Engine", f"{_current_engine} · {_current_model}"))
+        # Mode reporting: sticky COMMAND beats PURE; one-shot is shown
+        # additionally when active so the user knows a command is inbound.
+        mode_label = "COMMAND (sticky)" if _command_mode else "PURE"
+        if _one_shot_command:
+            mode_label = "COMMAND (one-shot)"
+        rows.append(("Mode", mode_label))
+        rows.append(("Auto-Learn", "ON" if _auto_learn_enabled else "OFF"))
+        rows.append(("Two-Pass", "ON" if _two_pass_enabled else "OFF"))
+        rows.append(("Screen Ctx", "ON" if _use_screen_context else "OFF"))
+        rows.append(("LLM Cleanup", "ON" if _post_process else "OFF"))
+        rows.append(("Spoken Punct", "ON" if _spoken_punct else "OFF"))
+        rows.append(("Dev Logs", "ON" if _dev_logs else "OFF"))
+        if _correction_active:
+            rows.append(("Watching", "press Enter to teach"))
+        last = _last_transcription
+        if last:
+            preview = last if len(last) < 40 else last[:37] + "..."
+            rows.append(("Last paste", preview))
+        return rows
 
     def _toggle_llm(self):
         global _post_process
@@ -1805,25 +2099,79 @@ class StatusWidget:
         self.root.geometry(f"+{x}+{y}")
         self._anchor_x = x + self.root.winfo_width()
         self._anchor_y = y + self.root.winfo_height()
+        # Mark widget as user-placed so the heartbeat stops auto-anchoring
+        # it to the cursor's monitor. Persist to config so it survives restart.
+        self._user_placed = True
+        try:
+            _save_config_keys({"widget_position": {"x": self._anchor_x, "y": self._anchor_y}})
+        except Exception:
+            pass
 
     def _refresh_idle_color(self):
-        """Re-apply idle dot colour based on current state.
+        """Re-apply idle dot appearance based on current state.
 
-        Priority (highest wins):
-          1. correction watch armed  -> amber (#D4A060)
-          2. COMMAND mode active     -> cool blue (#6E9CC9)
-          3. default idle            -> configured _IDLE_COLOR
+        The idle dot carries three orthogonal signals:
+          1. Correction watch armed -> amber pulse (most pronounced, short-lived)
+          2. Mode (PURE vs COMMAND) -> color + glyph
+             - PURE:    filled circle ●, idle gray
+             - COMMAND: hollow circle ◎, saturated blue
+          3. Transient overlays (ready toast, etc.) are layered by other methods.
+
+        The amber pulse is implemented via a recursive after() job that toggles
+        between two amber shades so the user can see the app is "watching"
+        even out of peripheral vision.
         """
         if self._state != "idle":
             return
+        # Always cancel any running pulse before deciding; fresh state wins.
+        self._stop_watch_pulse()
+
         if _correction_active:
-            color = "#D4A060"
+            # Pulsing amber draws the eye; start the animation.
+            self._start_watch_pulse()
+            return
+
+        # Otherwise paint a static color + glyph according to mode.
+        if _one_shot_command:
+            # One-shot: brighter, hollow ring so the user sees "I'm armed for
+            # a single command" at a glance. Cleared after the next paste.
+            glyph = "◎"
+            color = "#9CD0F5"
         elif _command_mode:
-            color = "#6E9CC9"
+            glyph = "◎"                  # hollow ring for sticky COMMAND
+            color = "#7FB0E0"             # bright blue so it's actually noticeable
         else:
+            glyph = "◉"                  # filled dot for PURE
             color = _IDLE_COLOR
-        self._dot.config(fg=color, bg=color)
+        self._dot.config(fg=color, bg=color, text=glyph)
         self.root.config(bg=color)
+
+    # ── Amber pulse for correction watch ──────────────────────────────────
+    def _start_watch_pulse(self):
+        """Kick off the amber pulse animation. Idempotent; _stop cancels it."""
+        self._pulse_phase = 0
+        self._tick_watch_pulse()
+
+    def _stop_watch_pulse(self):
+        job = getattr(self, "_pulse_job", None)
+        if job is not None:
+            try:
+                self.root.after_cancel(job)
+            except Exception:
+                pass
+        self._pulse_job = None
+
+    def _tick_watch_pulse(self):
+        """Toggle between two amber shades every ~600ms for a soft pulse."""
+        if self._state != "idle" or not _correction_active:
+            self._stop_watch_pulse()
+            return
+        # Alternate between darker and brighter amber
+        shade = "#D4A060" if (self._pulse_phase % 2 == 0) else "#FFC080"
+        self._dot.config(fg=shade, bg=shade, text="●")   # solid dot for visibility
+        self.root.config(bg=shade)
+        self._pulse_phase += 1
+        self._pulse_job = self.root.after(600, self._tick_watch_pulse)
 
     def _show_ready_toast(self):
         """Briefly turn the idle dot green to signal the ASR model is loaded and ready."""
@@ -1850,6 +2198,27 @@ class StatusWidget:
             )
             toast.place(relx=0.5, rely=0.5, anchor="center")
             self.root.after(2800, toast.destroy)
+        except Exception:
+            pass
+
+    def _notify_dict_pending(self, original: str, replacement: str, count: int, threshold: int):
+        """Flash a toast when a correction candidate is seen but not yet promoted.
+        Shows the user exactly how many more corrections are needed, so the
+        pending queue isn't invisible."""
+        try:
+            remaining = threshold - count
+            if remaining > 0:
+                text = f"📝 '{original}' → '{replacement}' ({count}/{threshold} · {remaining} more)"
+            else:
+                text = f"📝 '{original}' → '{replacement}' ({count}/{threshold})"
+            toast = tk.Label(
+                self._inner,
+                text=text,
+                bg="#2A261C", fg="#E0C080",
+                font=("Segoe UI", 8), padx=6, pady=2,
+            )
+            toast.place(relx=0.5, rely=0.5, anchor="center")
+            self.root.after(3500, toast.destroy)
         except Exception:
             pass
 
@@ -1891,6 +2260,16 @@ def _open_history_window():
         cwd=str(Path(__file__).parent),
     )
     log.info("[HistoryWindow] launched as pid %d", _history_proc.pid)
+
+
+def _open_log_file():
+    """Open cait-whisper.log in the user's default text handler.
+    Handy for debugging without having to find the file manually."""
+    try:
+        os.startfile(str(_LOG_PATH))  # Windows-only; opens with default handler
+        log.info(f"[ViewLog] opened {_LOG_PATH}")
+    except Exception as e:
+        log.warning(f"[ViewLog] could not open log file: {e}")
 
 
 # ─── Globals ──────────────────────────────────────────────────────────────────
@@ -2042,7 +2421,7 @@ def _trigger_retro_capture():
 
 
 def _transcribe_and_paste(frames: list):
-    global _processing
+    global _processing, _last_transcription, _one_shot_command
     try:
         if not frames:
             log.info("No audio captured — skipping")
@@ -2093,18 +2472,106 @@ def _transcribe_and_paste(frames: list):
             _show_no_speech()
             return
         if len(raw_words) >= 6:
-            from collections import Counter
-            for n in (2, 3, 4):
-                ngrams = [" ".join(raw_words[i:i+n]) for i in range(len(raw_words)-n+1)]
-                if ngrams:
-                    top_count = Counter(ngrams).most_common(1)[0][1]
-                    if top_count / len(ngrams) > 0.55:
-                        log.warning(
-                            f"Hallucination detected: {n}-gram repeated "
-                            f"{top_count}/{len(ngrams)} times — discarding"
-                        )
-                        _show_no_speech()
+            # Consecutive-run check with stripping.
+            # Catches partial loops that are interleaved with real content,
+            # e.g. "I plan to send a note... Thank you. Thank you. Thank you..."
+            # Instead of discarding the whole transcription, we locate the
+            # repeat run, strip it, and keep the legitimate prefix/suffix.
+            # Thresholds: window=1 needs 8 consecutive repeats (legitimate
+            # emphatic speech like "no no no no no" shouldn't trigger).
+            # Windows 2..5 need 5 consecutive repeats.
+            best = None   # (window, run_start, run_end, run_length, gram_text)
+            for window in (1, 2, 3, 4, 5):
+                if len(raw_words) < window * 5 + 1:
+                    continue
+                threshold = 8 if window == 1 else 5
+                max_run = 1
+                max_run_start = None
+                max_run_end = None
+                max_run_gram = None
+                run = 1
+                run_start = None
+                for i in range(window, len(raw_words) - window + 1):
+                    prev_gram = tuple(raw_words[i - window:i])
+                    this_gram = tuple(raw_words[i:i + window])
+                    if prev_gram == this_gram:
+                        if run == 1:
+                            run_start = i - window
+                        run += 1
+                        if run > max_run:
+                            max_run = run
+                            max_run_start = run_start
+                            max_run_end = i + window    # exclusive end of matched content
+                            max_run_gram = this_gram
+                    else:
+                        run = 1
+                if max_run >= threshold and max_run_start is not None:
+                    if best is None or max_run > best[3]:
+                        best = (window, max_run_start, max_run_end, max_run, max_run_gram)
+
+            if best is not None:
+                window, run_start, run_end, run_length, offending = best
+                run_end = min(run_end, len(raw_words))
+                prefix = raw_words[:run_start]
+                suffix = raw_words[run_end:]
+                cleaned = prefix + suffix
+                # Keep anything with 2+ real words; otherwise nothing substantial
+                # survived the strip and the whole thing is junk.
+                if len(cleaned) < 2:
+                    log.warning(
+                        f"Hallucination detected: {window}-gram {' '.join(offending)!r} "
+                        f"repeats {run_length}x; nothing left after strip — discarding"
+                    )
+                    _show_no_speech()
+                    return
+                stripped_count = len(raw_words) - len(cleaned)
+                log.warning(
+                    f"Hallucination: {window}-gram {' '.join(offending)!r} repeats "
+                    f"{run_length}x at position {run_start} — stripped {stripped_count} words, "
+                    f"keeping {len(cleaned)} real words"
+                )
+                raw_words = cleaned
+                raw_text = " ".join(raw_words)
+
+        # ── Early-path COMMAND mode: try to classify raw ASR as a command ─
+        # This MUST happen BEFORE spoken-punctuation, because several
+        # command phrases ("new paragraph", "new line") are ALSO spoken-
+        # punctuation rules. If we ran spoken-punct first, "New paragraph"
+        # would be replaced with "\n\n" and become empty, and the classifier
+        # would see nothing.
+        # Fires when either:
+        #   - sticky _command_mode is on, or
+        #   - one-shot was triggered via Shift+Alt+C for just this utterance.
+        early_command_fired = False
+        if _command_mode or _one_shot_command:
+            try:
+                import commands as _cmds_early
+                early_cmd = _cmds_early.classify(raw_text, has_selection=False)
+                if early_cmd is not None and early_cmd.source == "regex":
+                    # Only trust regex matches here - LLM classification needs
+                    # the fuller pipeline context (selection, screen_ctx) which
+                    # we haven't captured yet. LLM path runs later in the
+                    # normal flow after dictionary substitution.
+                    log.info(f"[Mode=COMMAND] early regex match: {early_cmd.type} <- {raw_text!r}")
+                    # Save to history so user sees what was said
+                    _last_transcription = raw_text
+                    new_entry = {
+                        "text":   f"[CMD:{early_cmd.type}] {raw_text}",
+                        "raw":    raw_text,
+                        "ts":     datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        "engine": f"{_current_engine}/{_current_model}",
+                    }
+                    threading.Thread(target=_save_history, args=(new_entry,),
+                                     daemon=True, name="save-history").start()
+                    ok = _cmds_early.execute(early_cmd, selection_text="", kb=keyboard)
+                    if ok:
+                        log.info(f"[Mode=COMMAND] ✓ executed ({time.perf_counter() - t0:.2f}s)")
+                        if _widget:
+                            _widget.set_state("done")
                         return
+                    log.warning("[Mode=COMMAND] early-path execution failed; falling through")
+            except Exception as e:
+                log.warning(f"[Mode=COMMAND] early classifier error: {e}")
 
         # ── Spoken punctuation ───────────────────────────────────────────
         # Replace spoken words ("period", "comma", "new line", …) with symbols
@@ -2136,15 +2603,13 @@ def _transcribe_and_paste(frames: list):
         if final_text != raw_text:
             log.info(f"Dictionary applied: {final_text!r}")
 
-        # Declare once; used by both COMMAND mode branch and the normal paste path.
-        global _last_transcription
-
         # ── COMMAND mode: classify & execute ─────────────────────────────
         # In PURE mode this block is skipped entirely (zero overhead).
         # In COMMAND mode the utterance is routed through a hybrid regex+LLM
         # classifier. Commands are executed directly; non-commands fall through
         # to the normal paste path as dictation.
-        if _command_mode:
+        # Also fires for one-shot command mode (Shift+Alt+C).
+        if _command_mode or _one_shot_command:
             try:
                 import context as _ctx
                 import commands as _cmds
@@ -2236,6 +2701,12 @@ def _transcribe_and_paste(frames: list):
         # which can leave _ctrl_down stuck as True.  Hard-reset so the next
         # Ctrl+Win press is recognised cleanly.
         _ctrl_down = _win_down = _hold_mode_active = False
+        # Always clear the one-shot flag regardless of what happened. Whether
+        # the command executed, dictated as normal, or errored out, the user
+        # expects to return to PURE behavior for the next utterance.
+        if _one_shot_command:
+            log.info("[OneShot] command processed, reverting to PURE")
+            _one_shot_command = False
         # 400 ms grace period so an accidental immediate re-press is rejected
         # visually (busy flash) rather than silently swallowed.
         _ready_time = time.time() + 0.4
@@ -2325,7 +2796,7 @@ _TRACKED_KEYS = frozenset({
     "ctrl", "left ctrl", "right ctrl",
     "alt", "left alt", "right alt",
     "shift", "left shift", "right shift",
-    "enter", "z", "b", "space",
+    "enter", "z", "r", "c", "space",
     "windows", "left windows", "right windows",
 })
 
@@ -2356,11 +2827,23 @@ def _on_key_event(event):
             threading.Thread(target=_repaste_last, daemon=True, name="repaste").start()
             return
 
-    # ── Ctrl+Win+B — retroactive capture (last ~15 s) ────────────────────────
-    if key == "b":
-        if down and _ctrl_down and _win_down:
+    # ── Shift+Alt+R — retroactive capture (last ~15 s) ────────────────────────
+    # Shift+Alt+R chosen for consistency with Shift+Alt+Z (re-paste) and because
+    # Ctrl+Win+B collides with Intel/Lenovo display drivers on some systems.
+    if key == "r":
+        if down and _alt_down and _shift_down:
             threading.Thread(target=_trigger_retro_capture,
                              daemon=True, name="retro").start()
+            return
+
+    # ── Shift+Alt+C — one-shot COMMAND mode ──────────────────────────────────
+    # Press once: begin hands-free recording with the command flag set so the
+    # classifier fires on what you say. Press again: stop, classify, execute,
+    # then auto-revert to PURE mode. No toggle management required.
+    if key == "c":
+        if down and _alt_down and _shift_down:
+            threading.Thread(target=_trigger_one_shot_command,
+                             daemon=True, name="oneshot-cmd").start()
             return
 
     # ── Space key — detects Ctrl+Win+Space without suppress=True ──────────────
@@ -2413,6 +2896,33 @@ def _toggle_hands_free():
         else:
             _start_recording()
         log.info("Hands-free: talk freely, then Ctrl+Win to paste")
+
+
+def _trigger_one_shot_command():
+    """Shift+Alt+C: one-shot COMMAND mode.
+
+    First press → start hands-free recording AND set the one-shot flag, so
+    whatever the user says this round will be run through the command
+    classifier regardless of the current sticky mode.
+    Second press → stop and send. _transcribe_and_paste sees the one-shot
+    flag, classifies + executes, and resets the flag on its way out.
+
+    Key insight: this collapses "switch to COMMAND mode" and "start recording"
+    into a single gesture, then auto-reverts so the user never has to manage
+    mode state. The sticky `_command_mode` toggle is untouched."""
+    global _one_shot_command
+    if _processing:
+        log.info("[OneShot] ignored (processing)")
+        return
+    if _recording:
+        # Second press — stop and let the pipeline run
+        log.info("[OneShot] stopping recording; command will fire on release")
+        _stop_and_send()
+        return
+    # First press — start recording, mark this round as one-shot command
+    _one_shot_command = True
+    log.info("[OneShot] listening for one command...")
+    _toggle_hands_free()
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 

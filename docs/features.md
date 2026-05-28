@@ -57,11 +57,11 @@ Say punctuation words out loud and they become symbols:
 
 ## LLM cleanup (optional post-processing)
 
-When ON, every transcription gets sent to your local Ollama instance. The model removes filler words ("um", "uh", "like", "so"), fixes obvious grammar issues, and adds missing punctuation. The raw transcription is preserved in the history window so you can see exactly what the model changed.
+When ON, every transcription gets sent to your configured LLM provider (local Ollama by default, or any OpenAI-compatible remote endpoint). The model removes filler words ("um", "uh", "like", "so"), fixes obvious grammar issues, and adds missing punctuation. The raw transcription is preserved in the history window so you can see exactly what the model changed.
 
 - **Toggle**: right-click menu -> "LLM Cleanup: ON/OFF"
-- **Requires**: Ollama installed and running, a pulled model (`llama3.2:3b` by default)
-- **Latency**: adds 0.5-2 seconds per paste depending on model size
+- **Provider**: configured via the Settings tab in the History & Dictionary window. See [providers.md](providers.md).
+- **Latency**: 0.5-2 seconds for local Ollama, 200-500ms for fast remote endpoints (Groq, Z.AI)
 
 ## Auto-learning personal dictionary
 

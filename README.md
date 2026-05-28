@@ -36,14 +36,31 @@
 
 ---
 
-## Quick Start
+## Install in 3 steps
 
-```bat
-setup.bat          # One-time: installs dependencies + downloads model (~400 MB)
-start.bat          # Launch the app (requires admin for global hotkeys)
-```
+Made for Windows 10 or 11. No terminal experience needed.
 
-A small dot appears in the corner of your screen. Hold `Ctrl+Win`, speak, release. Done.
+### 1. Install Python
+Download from [python.org/downloads](https://www.python.org/downloads/) and run the installer. **On the first screen, tick the box that says "Add python.exe to PATH"** before clicking Install. (If you forget, just re-run the installer and choose Modify.)
+
+> Already have Python 3.10 or newer? Skip this step.
+
+### 2. Download cait-whisper
+Click the green **Code** button at the top of this page, then **Download ZIP**. Extract the zip somewhere convenient like `C:\cait-whisper\`.
+
+> Prefer a Release? Grab the latest from the [Releases page](../../releases/latest) instead.
+
+### 3. Run setup, then run the app
+Open the cait-whisper folder you just extracted. Double-click:
+
+1. **`setup.bat`** - installs everything cait-whisper needs (one time, ~5 minutes the first time).
+2. **`start.bat`** - launches the app. A Windows prompt will ask for admin permission; click Yes (needed for global hotkeys).
+
+A small dark coin appears in the bottom-right corner of your screen. **Hold `Ctrl + Win`, speak, release** - your words appear wherever your cursor is.
+
+That's it. Right-click the coin to switch models, change settings, or open the History window.
+
+> Something not working? See [docs/troubleshooting.md](docs/troubleshooting.md) or open an [issue](../../issues).
 
 ---
 
@@ -163,6 +180,7 @@ Anything the classifier isn't confident about gets pasted as dictation, same as 
 | `Ctrl + Win` (hold) | Hold-to-talk - speak while held, release to transcribe |
 | `Ctrl + Win + Space` | Hands-free toggle - start talking freely |
 | `Shift + Alt + R` | Retroactive capture - transcribe the last ~15 seconds |
+| `Shift + Alt + T` | Re-transcribe last recording (try again with current engine) |
 | `Shift + Alt + C` | One-shot COMMAND mode (tap, speak a command, tap, auto-reverts) |
 | `Shift + Alt + Z` | Re-paste the last transcription |
 
@@ -174,13 +192,21 @@ Anything the classifier isn't confident about gets pasted as dictation, same as 
 
 Full user manual lives in [`docs/`](docs/):
 
-- [Installation](docs/installation.md) - step by step, with Ollama setup
+**For users**
+- [Installation](docs/installation.md) - step-by-step with screenshots and troubleshooting
 - [Getting Started](docs/getting-started.md) - five-minute walkthrough
 - [Features](docs/features.md) - complete reference for every feature
 - [Hotkeys](docs/hotkeys.md) - the full key reference
 - [Troubleshooting](docs/troubleshooting.md) - common issues and fixes
 - [FAQ](docs/faq.md) - common questions
-- [UAT](docs/UAT.md) - test script used before every release
+- [Providers](docs/providers.md) - configure Ollama, OpenAI, Z.AI, Groq, or other OpenAI-compatible endpoints
+
+**For testers**
+- [For Testers](docs/for-testers.md) - one-page brief for a fresh tester
+
+**For contributors**
+- [Design system](docs/design-system.md) - the brand tokens and visual language
+- [UAT](docs/UAT.md) - test script run before every release
 
 ---
 
@@ -285,13 +311,25 @@ The biggest opportunity right now is **macOS and Linux support** - the core logi
 
 ---
 
-## Files
+## Repo layout
 
-| File | Purpose |
-|------|---------|
-| `client.py` | Main application - engines, UI, hotkeys, dictionary, transcription pipeline |
-| `history_window.py` | History, dictionary, and pending corrections panel (separate process) |
-| `config.example.json` | Template configuration with all available options |
-| `requirements.txt` | Python dependencies |
-| `setup.bat` | One-time setup - creates venv, installs packages, downloads models |
-| `start.bat` | Launcher - elevates to admin, activates venv, runs the app |
+```
+cait-whisper/
+├── setup.bat               One-time setup (creates venv, installs deps, downloads model)
+├── start.bat               Launcher (elevates to admin, activates venv, runs the app)
+├── requirements.txt        Python dependencies
+├── config.example.json     Template config - copy to config.json to customize
+│
+├── client.py               Main app: engines, UI, hotkeys, dictation pipeline
+├── history_window.py       History / Dictionary / Pending / Settings window
+├── theme.py                Brand tokens, PIL-rendered mark + glyphs, fonts
+├── commands.py             Voice-command engine (COMMAND mode)
+├── llm_provider.py         Multi-provider LLM dispatch (Ollama / OpenAI / Z.AI / Groq)
+├── context.py              Screen-context OCR (RapidOCR)
+├── config_io.py            Atomic config read/write with secret redaction
+│
+├── assets/                 Brand assets (icon)
+├── docs/                   User and developer documentation
+│   └── economy/            $CAIT contribution ledger
+└── .github/                Issue templates, workflows, funding config
+```

@@ -99,10 +99,13 @@ class Command:
 # ── LLM fallback prompt ───────────────────────────────────────────────────
 # Strict JSON output keeps parsing deterministic.
 
-COMMAND_PROMPT = """You classify voice utterances from a dictation app as either a COMMAND (to execute) or DICTATION (text to type verbatim).
+# v2.5.1: split into system (rules + format) and user (content). Models
+# follow instructions more reliably this way. JSON schema is part of the
+# system prompt so the user message stays purely content.
+COMMAND_SYSTEM_PROMPT = """You classify voice utterances from a dictation app as either a COMMAND (to execute) or DICTATION (text to type verbatim).
 
 Reply ONLY with JSON matching this schema:
-{{"is_command": true|false, "type": "<command_id>"|"", "confidence": 0.0-1.0, "reasoning": "<brief>"}}
+{"is_command": true|false, "type": "<command_id>"|"", "confidence": 0.0-1.0, "reasoning": "<brief>"}
 
 Known command IDs:
 - new_paragraph, new_line
@@ -115,31 +118,29 @@ Rules:
 - If unsure, prefer DICTATION (is_command=false). The default is safety.
 - Only output is_command=true when confidence >= 0.85.
 - Utterances longer than ~8 words are almost always dictation.
-- Selection-based commands (rewrite_*, summarize_selection) require a selection; if unclear, set confidence lower.
+- Selection-based commands (rewrite_*, summarize_selection) require a selection; if unclear, set confidence lower."""
 
-Selection present: {has_selection}
+# User-role content is just the actual data the model needs to classify.
+COMMAND_USER_PROMPT = """Selection present: {has_selection}
 {screen_context_block}
 Utterance: {utterance}"""
 
 
 def _llm_classify(utterance: str, has_selection: bool, screen_context: str = "") -> Optional[Command]:
-    """Call Ollama to classify the utterance. Returns None on any failure.
+    """Classify the utterance via the configured LLM provider.
+    Returns None on any failure (caller treats as "not a command").
 
     Optional `screen_context` (OCR text from around the cursor, v2.3) is
     appended to the prompt so the model can reason about what the user is
     looking at. Empty string disables screen-context augmentation.
     """
+    # llm_provider routes to local Ollama or any OpenAI-compatible endpoint
+    # based on config. v2.5+ approach; replaces direct ollama.chat() use.
     try:
-        # Imported lazily so cait-whisper still imports if ollama isn't installed
-        import ollama  # type: ignore
-    except Exception:
+        from llm_provider import llm_call
+    except Exception as e:
+        log.warning(f"[Commands] llm_provider import failed: {e}")
         return None
-
-    try:
-        # Read model name from a module-level config that client.py will set
-        from client import OLLAMA_MODEL  # type: ignore
-    except Exception:
-        OLLAMA_MODEL = "llama3.2:3b"
 
     # Build the optional screen-context block. Kept small to avoid blowing
     # the prompt budget on low-end models.
@@ -151,20 +152,27 @@ def _llm_classify(utterance: str, has_selection: bool, screen_context: str = "")
     else:
         screen_block = ""
 
-    prompt = COMMAND_PROMPT.format(
+    user_msg = COMMAND_USER_PROMPT.format(
         has_selection="yes" if has_selection else "no",
         screen_context_block=screen_block,
         utterance=utterance.strip(),
     )
     try:
         t0 = time.perf_counter()
-        resp = ollama.chat(
-            model=OLLAMA_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            options={"temperature": 0.1, "num_predict": 128},
+        # json_mode=True asks providers that support it to enforce strict JSON.
+        # Providers that don't support it silently ignore the kwarg.
+        # System prompt carries rules + JSON schema; user prompt is just content.
+        content = llm_call(
+            user_msg,
+            system_prompt=COMMAND_SYSTEM_PROMPT,
+            temperature=0.1,
+            max_tokens=128,
+            json_mode=True,
+            timeout=15.0,   # tight timeout - this runs in the hot path
         )
         elapsed = time.perf_counter() - t0
-        content = resp["message"]["content"].strip()
+        if content is None:
+            return None
         # Some models wrap JSON in code fences; strip them
         if content.startswith("```"):
             content = content.strip("`").lstrip("json").strip()
@@ -248,42 +256,71 @@ def classify(utterance: str, has_selection: bool = False, screen_context: str = 
 # Keyboard ops delegated to the caller's `keyboard` module so we don't
 # force a top-level dependency here. Caller passes a reference in `kb`.
 
-# Rewrite prompts for selection commands
-_REWRITE_PROMPTS = {
-    CMD_REWRITE_FORMAL:  "Rewrite the following text to be more formal and professional while preserving the meaning exactly. Output only the rewritten text:\n\n{text}",
-    CMD_REWRITE_CASUAL:  "Rewrite the following text to be more casual and conversational while preserving the meaning. Output only the rewritten text:\n\n{text}",
-    CMD_REWRITE_SHORTER: "Rewrite the following text to be significantly shorter while preserving the key meaning. Output only the rewritten text:\n\n{text}",
-    CMD_REWRITE_LONGER:  "Expand the following text with more detail while preserving the meaning and tone. Output only the expanded text:\n\n{text}",
-    CMD_SUMMARIZE:       "Summarize the following text in one or two sentences. Output only the summary:\n\n{text}",
-    CMD_SUMMARIZE_SCREEN: "Summarize what is shown on the user's screen, based on the OCR text below. Be brief, one or two sentences. Output only the summary, no preamble:\n\nScreen text:\n{text}",
-    CMD_ANSWER_SCREEN:    "Explain clearly and briefly what is shown on the user's screen, based on the OCR text below. One short paragraph max. Output only the explanation, no preamble:\n\nScreen text:\n{text}",
+# v2.5.1: split rewrite prompts into (system_prompt, user_template) pairs.
+# System prompt: behavior + output format rules. User: just the content.
+# This matches OpenAI / Anthropic / Mistral best practice and noticeably
+# improves "Output only the X, no preamble" compliance on smaller models.
+_REWRITE_PROMPTS: dict[str, tuple[str, str]] = {
+    CMD_REWRITE_FORMAL: (
+        "You rewrite text to be more formal and professional while preserving the meaning exactly. "
+        "Output ONLY the rewritten text, no preamble, no explanation.",
+        "{text}",
+    ),
+    CMD_REWRITE_CASUAL: (
+        "You rewrite text to be more casual and conversational while preserving the meaning. "
+        "Output ONLY the rewritten text, no preamble, no explanation.",
+        "{text}",
+    ),
+    CMD_REWRITE_SHORTER: (
+        "You rewrite text to be significantly shorter while preserving the key meaning. "
+        "Output ONLY the rewritten text, no preamble, no explanation.",
+        "{text}",
+    ),
+    CMD_REWRITE_LONGER: (
+        "You expand text with more detail while preserving the meaning and tone. "
+        "Output ONLY the expanded text, no preamble, no explanation.",
+        "{text}",
+    ),
+    CMD_SUMMARIZE: (
+        "You summarize text in one or two sentences. "
+        "Output ONLY the summary, no preamble, no explanation.",
+        "{text}",
+    ),
+    CMD_SUMMARIZE_SCREEN: (
+        "You summarize what is shown on a user's screen based on OCR-extracted text. "
+        "Be brief - one or two sentences. "
+        "Output ONLY the summary, no preamble, no explanation.",
+        "Screen text:\n{text}",
+    ),
+    CMD_ANSWER_SCREEN: (
+        "You explain clearly and briefly what is shown on a user's screen based on OCR-extracted text. "
+        "One short paragraph maximum. "
+        "Output ONLY the explanation, no preamble, no explanation.",
+        "Screen text:\n{text}",
+    ),
 }
 
 
 def _llm_rewrite(text: str, command_type: str) -> Optional[str]:
-    """Run a rewrite/summarize prompt through Ollama. None on failure."""
+    """Run a rewrite/summarize prompt through the configured LLM provider.
+    None on failure."""
     try:
-        import ollama  # type: ignore
-    except Exception:
-        return None
-    try:
-        from client import OLLAMA_MODEL  # type: ignore
-    except Exception:
-        OLLAMA_MODEL = "llama3.2:3b"
-
-    template = _REWRITE_PROMPTS.get(command_type)
-    if not template:
-        return None
-    try:
-        resp = ollama.chat(
-            model=OLLAMA_MODEL,
-            messages=[{"role": "user", "content": template.format(text=text)}],
-            options={"temperature": 0.3, "num_predict": 512},
-        )
-        return resp["message"]["content"].strip()
+        from llm_provider import llm_call
     except Exception as e:
-        log.warning(f"[Commands] rewrite via LLM failed: {e}")
+        log.warning(f"[Commands] llm_provider import failed: {e}")
         return None
+
+    entry = _REWRITE_PROMPTS.get(command_type)
+    if not entry:
+        return None
+    system_prompt, user_template = entry
+    return llm_call(
+        user_template.format(text=text),
+        system_prompt=system_prompt,
+        temperature=0.3,
+        max_tokens=512,
+        timeout=45.0,   # rewrites can be longer; allow more time for remote
+    )
 
 
 def execute(cmd: Command, selection_text: str = "", kb=None, paste_fn=None) -> bool:

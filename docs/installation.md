@@ -40,15 +40,33 @@ copy config.example.json config.json
 start.bat
 ```
 
-## Ollama (optional but recommended)
+## LLM provider (Ollama or remote)
 
-Ollama runs local language models. It's used by:
+cait-whisper uses an LLM for:
 
 - **Voice commands that rewrite text** ("make this more formal", "shorten this", "summarize this")
 - **Screen context** ("summarize what you see")
 - **LLM cleanup** (optional post-processing of transcriptions)
 
+You have two choices:
+
+### Option 1: Local Ollama (default, fully private)
+
+Recommended if you value privacy or have decent CPU/GPU. All inference stays on your machine.
+
 Without Ollama, the regex-based commands still work ("new paragraph", "delete the last sentence", etc.). Selection-based and screen commands silently fall back to plain dictation.
+
+### Option 2: Remote OpenAI-compatible endpoint (faster, paid or self-hosted)
+
+Recommended if local Ollama feels slow on your hardware (typical Ollama latency: 1-3s per rewrite). cait-whisper supports any OpenAI-compatible endpoint:
+
+- **Z.AI** (Zhipu GLM models)
+- **Groq** (very fast Llama / Mixtral)
+- **Together AI**, **OpenAI**, **DeepSeek**
+- **Self-hosted vLLM** behind your firewall
+- **Remote Ollama** over Tailscale or any HTTPS endpoint
+
+See [providers.md](providers.md) for setup details and example configs.
 
 **Install Ollama:**
 

@@ -16,6 +16,10 @@ history.json
 dictionary.json
 pending_corrections.json
 cait-whisper.log
+# Rotated log files (.log.1, .log.2, etc.) created by the rotating handler
+cait-whisper.log.*
+# Atomic-write temp files that got orphaned from a crashed write
+*.tmp
 
 # Downloaded model weights (large, re-downloaded on first run)
 *.onnx
@@ -39,3 +43,6 @@ desktop.ini
 
 # Claude Code (development tooling)
 .claude/
+
+# Dev preview renders (PIL output during design iteration)
+preview/

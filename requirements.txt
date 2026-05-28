@@ -23,6 +23,12 @@ Pillow
 # Also used by COMMAND mode for the voice-command classifier fallback
 ollama
 
+# OpenAI-compatible client (v2.5+).
+# Used when llm_provider is "openai_compatible" - covers Z.AI, Groq, Together,
+# OpenAI, DeepSeek, self-hosted vLLM, Tailscale Ollama-over-HTTPS, etc.
+# Local-Ollama-only users can comment this out to skip the install.
+openai>=1.57
+
 # UI Automation for selection / context detection (used by COMMAND mode)
 pywinauto
 

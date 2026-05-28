@@ -6,9 +6,9 @@ Thanks for your interest in contributing. This project is maintained as a human-
 
 Contributors earn $CAIT tokens for merged work. $CAIT is a utility token on Base that will eventually power governance and ecosystem access.
 
-**How:** include your Base wallet address in your PR or issue body. When the contribution is confirmed, it gets recorded in [rewards.json](rewards.json). No gas required in Phase 1 - it's just a signed ledger entry. When the contract deploys, those entries become claimable.
+**How:** include your Base wallet address in your PR or issue body. When the contribution is confirmed, it gets recorded in [docs/economy/rewards.json](docs/economy/rewards.json). No gas required in Phase 1 - it's just a signed ledger entry. When the contract deploys, those entries become claimable.
 
-Full details: [ECONOMY.md](ECONOMY.md)
+Full details: [docs/economy/ECONOMY.md](docs/economy/ECONOMY.md)
 
 ## How to Contribute
 

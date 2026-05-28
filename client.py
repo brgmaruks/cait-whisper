@@ -30,6 +30,11 @@ import tkinter as tk
 import traceback
 from pathlib import Path
 
+# Brand tokens (palette, type, spacing, brand-mark drawing helpers).
+# Imports cleanly with no Tk dependency; font resolution upgrades happen
+# in main() after the Tk root exists.
+import theme
+
 # ─── Early crash handler ──────────────────────────────────────────────────────
 # Runs before logging is configured, so we write directly to the log file
 # and show a GUI dialog (no console when launched via pythonw).
@@ -86,6 +91,18 @@ log = logging.getLogger("cait-whisper")
 # ─── Load config ──────────────────────────────────────────────────────────────
 CONFIG_PATH = Path(__file__).parent / "config.json"
 
+# Brand assets live in assets/. The .ico is generated on first launch if
+# missing (theme.ensure_brand_ico is idempotent), so a fresh clone without
+# the committed file still gets one. The history window points at the same
+# path so taskbar/Alt-Tab/title bar all show the Φ-in-circle.
+ASSETS_DIR = Path(__file__).parent / "assets"
+ICO_PATH = ASSETS_DIR / "cait.ico"
+try:
+    ASSETS_DIR.mkdir(exist_ok=True)
+    theme.ensure_brand_ico(ICO_PATH)
+except Exception as _e:
+    log.warning(f"[Theme] could not generate cait.ico: {_e}")
+
 def load_config():
     if not CONFIG_PATH.exists():
         _fatal("config.json not found. Please run setup.bat first.")
@@ -101,6 +118,11 @@ def load_config():
 cfg            = load_config()
 SAMPLE_RATE    = cfg.get("sample_rate", 16000)
 CHANNELS       = cfg.get("channels", 1)
+# Input device: empty/None uses Windows default. Otherwise a substring match
+# against device names (case-insensitive). Example: "Jabra" matches any
+# device whose name contains "Jabra" - survives hostapi variations (WASAPI
+# vs MME vs DirectSound exposing the same physical device multiple times).
+INPUT_DEVICE   = cfg.get("input_device", "")
 OLLAMA_MODEL    = cfg.get("ollama_model", "llama3.2:3b")
 ENGINE          = cfg.get("engine", "moonshine").lower()
 WHISPER_MODEL   = cfg.get("whisper_model", "large-v3-turbo")
@@ -122,12 +144,34 @@ _post_process   = cfg.get("post_process", False)
 # Audio cue profile — set in config.json as "audio_cue": "subtle|chime|click|scifi|off"
 AUDIO_CUE = cfg.get("audio_cue", "subtle")
 
+# Waveform style for the active recording strip. User-pickable from the
+# right-click menu. Each style is a distinct visual rhythm for the same
+# amplitude data. See StatusWidget._draw_wave_* methods for the renderers.
+WAVEFORM_STYLES = (
+    ("wave_filled",       "Wave (filled)"),
+    ("bars_classic",      "Bars"),
+    ("bars_mirror",       "Mirror bars"),
+    ("dots",              "Dots"),
+    ("line_oscilloscope", "Oscilloscope"),
+    ("blocks_brutalist",  "Blocks"),
+)
+WAVEFORM_STYLE = cfg.get("waveform_style", "bars_mirror")
+
 # Spoken punctuation — replace words like "period" / "new line" with symbols.
 # Toggled via right-click menu or config.json "spoken_punctuation": true/false.
 _spoken_punct: bool = cfg.get("spoken_punctuation", True)
 _auto_learn_enabled: bool = cfg.get("auto_learn", True)
 _command_mode: bool = cfg.get("command_mode", False)  # COMMAND vs PURE mode
 _one_shot_command: bool = False   # transient: set by Shift+Alt+C, consumed on next transcription
+# v2.5.1 lean mode: retroactive buffer is opt-in. When OFF (default) the
+# audio callback skips the deque append entirely, eliminating the constant
+# memory write traffic for users who never press Shift+Alt+R.
+_retro_enabled: bool = cfg.get("retro_enabled", False)
+# Widget cursor-follow: when True (default), the dot follows you to whichever
+# monitor your cursor moves to. v2.5.1 reworked this to compare monitor
+# IDENTITY (HMONITOR handle) instead of coordinates, so transient post-wake
+# work-area wobbles on a single monitor no longer move the dot.
+_WIDGET_FOLLOW_CURSOR: bool = cfg.get("widget_follow_cursor", True)
 _use_screen_context: bool = cfg.get("use_screen_context", False)  # v2.3 OCR augmentation
 _dev_logs: bool = cfg.get("dev_logs", False)  # v2.4 verbose debug logging
 
@@ -174,17 +218,30 @@ def _save_config_key(key: str, value):
 
 
 def _save_config_keys(updates: dict):
-    """Persist multiple config values in a single read-write cycle."""
+    """Persist multiple config values in a single read-write cycle.
+    Secret-like keys (api_key, token, etc.) are redacted in log output."""
     try:
         with open(CONFIG_PATH) as f:
             data = json.load(f)
         data.update(updates)
         with open(CONFIG_PATH, "w") as f:
             json.dump(data, f, indent=4)
-        for k, v in updates.items():
+        # Redact secrets before logging - matters once users put API keys in.
+        try:
+            from config_io import redact_for_log
+            safe = redact_for_log(updates)
+        except Exception:
+            safe = updates
+        for k, v in safe.items():
             log.info(f"Config saved: {k} = {v!r}")
     except Exception as e:
-        log.error(f"FAILED to save config ({updates!r}): {e}")
+        # Also redact in the error log path
+        try:
+            from config_io import redact_for_log
+            safe = redact_for_log(updates)
+        except Exception:
+            safe = updates
+        log.error(f"FAILED to save config ({safe!r}): {e}")
 
 # ─── History & Dictionary ─────────────────────────────────────────────────────
 
@@ -477,6 +534,23 @@ def _toggle_two_pass():
         _widget.root.after(0, _widget._rebuild_menu)
 
 
+def _toggle_retro_buffer():
+    """Toggle the rolling 20-second audio buffer for retroactive capture.
+    Persists across restarts. When OFF the audio callback skips the deque
+    append entirely - meaningful savings during long idle periods because
+    the lock acquire + memcpy on every audio block adds up over time."""
+    global _retro_enabled
+    _retro_enabled = not _retro_enabled
+    _save_config_key("retro_enabled", _retro_enabled)
+    log.info(f"Retroactive buffer {'enabled' if _retro_enabled else 'disabled'}")
+    if not _retro_enabled:
+        # Empty the buffer to release memory immediately
+        with _retro_lock:
+            _retro_frames.clear()
+    if _widget:
+        _widget.root.after(0, _widget._rebuild_menu)
+
+
 def _start_correction_watch(original_text: str):
     """Arm the correction watcher.  After paste, we remember the original
     transcription and wait for the user to press Enter, which signals
@@ -692,15 +766,17 @@ def _diff_and_learn(original: str, corrected: str):
             _ui_after(0, _widget._notify_dict_learned, orig_w, corr_w)
 
 
-CLEANUP_PROMPT = """You are a dictation post-processor. Clean up the following raw speech transcript:
+# v2.5.1: split into system (rules) and user (content). System role
+# carries the format constraint ("ONLY the cleaned text") - models comply
+# more reliably when this is in the system message than buried in user text.
+CLEANUP_SYSTEM_PROMPT = """You are a dictation post-processor. Clean up raw speech transcripts:
 - Remove filler words (um, uh, like, you know, basically, so)
 - Fix grammar and sentence structure naturally
 - Add proper punctuation
 - Preserve the speaker's meaning and tone exactly
-- Output ONLY the cleaned text, nothing else
+- Output ONLY the cleaned text, no preamble, no commentary."""
 
-Raw transcript:
-{transcript}"""
+CLEANUP_USER_TEMPLATE = "Raw transcript:\n{transcript}"
 
 def _trim_silence(audio: np.ndarray, sr: int = SAMPLE_RATE) -> np.ndarray:
     """Trim leading and trailing silence from audio using a rolling RMS window.
@@ -891,7 +967,7 @@ class _WhisperEngine:
             hint = " ".join(hint_words)
         else:
             hint = None
-        segments, _ = self._model.transcribe(
+        segments, _info = self._model.transcribe(
             audio,
             language=LANGUAGE,
             vad_filter=True,
@@ -899,8 +975,30 @@ class _WhisperEngine:
             temperature=0,
             condition_on_previous_text=False,
             initial_prompt=hint,
+            # v2.5.1: skip timestamp computation. We don't surface word/segment
+            # timing anywhere in the app, so this is a free 10-20% speedup.
+            without_timestamps=True,
         )
-        return " ".join(seg.text for seg in segments).strip()
+        # v2.5.1: filter out segments the model itself thinks are silence.
+        # `no_speech_prob` is Whisper's own indicator. When >0.85 the segment
+        # is almost certainly a hallucination from background noise / fan / hum.
+        # SAFETY: if filtering would drop ALL segments, keep them all - we
+        # never want to return empty when Whisper actually transcribed something.
+        # The user is waiting for output; a slightly-noisy transcription beats
+        # a silent failure that looks like the app is broken.
+        all_segs = list(segments)
+        kept = []
+        for seg in all_segs:
+            nsp = getattr(seg, "no_speech_prob", 0.0)
+            if nsp > 0.85:
+                log.debug(f"[Whisper] dropping segment with no_speech_prob={nsp:.2f}: {seg.text!r}")
+                continue
+            kept.append(seg.text)
+        if not kept and all_segs:
+            log.warning("[Whisper] all segments scored as silence by no_speech_prob; "
+                        "keeping them anyway rather than returning empty")
+            kept = [seg.text for seg in all_segs]
+        return " ".join(kept).strip()
 
 
 class _ParakeetEngine:
@@ -1004,11 +1102,74 @@ _two_pass_enabled: bool = cfg.get("two_pass", True)
 # ─── Transcription helper ─────────────────────────────────────────────────────
 
 def _run_asr(audio: np.ndarray) -> str:
-    """Flatten audio to 1-D float32 and dispatch to the active engine."""
+    """Flatten audio to 1-D float32 and dispatch to the active engine.
+    v2.5.1: if the model was idle-unloaded, reload it transparently before
+    transcribing. Marks the last-use timestamp so the idle supervisor knows
+    when to unload again."""
+    global _asr_model, _last_asr_use_time
+    # If the model was unloaded by the idle supervisor, reload now.
+    # Holds the lock during reload so a concurrent _switch_model can't race.
     with _asr_lock:
         if _asr_model is None:
-            return ""
+            log.info("[IdleUnload] ASR model was unloaded - reloading now (1-3 sec delay)")
+            try:
+                _asr_model = _load_asr()
+                log.info(f"[IdleUnload] reload OK: {_current_engine}/{_current_model}")
+            except Exception as e:
+                log.error(f"[IdleUnload] reload failed: {e}")
+                return ""
+        _last_asr_use_time = time.time()
         return _asr_model.transcribe(audio.flatten().astype(np.float32))
+
+
+# v2.5.1 idle-unload state
+# Timestamps tracking when each model was last used. The supervisor thread
+# polls these every 60s and drops the model if the idle threshold is exceeded.
+# `0.0` means "never used in this session" - supervisor leaves it loaded.
+_last_asr_use_time: float = 0.0
+_last_bg_asr_use_time: float = 0.0
+_ASR_IDLE_UNLOAD_SECS = 10 * 60   # 10 minutes
+_BG_IDLE_UNLOAD_SECS  = 5 * 60    # 5 minutes
+
+
+def _idle_unload_supervisor():
+    """Daemon thread: every 60 seconds, check if ASR models have been idle
+    past their thresholds and drop their references if so. Reload happens
+    transparently on the next _run_asr() / _run_bg_asr() call.
+
+    Safe to run continuously - the locks make it race-free with active
+    transcriptions and model-switch operations."""
+    global _asr_model, _bg_asr_model
+    log.info(f"[IdleUnload] supervisor started (primary={_ASR_IDLE_UNLOAD_SECS}s, "
+             f"bg={_BG_IDLE_UNLOAD_SECS}s)")
+    while True:
+        try:
+            time.sleep(60)
+            now = time.time()
+            # Don't unload while a recording or transcription is in progress
+            if _recording or _processing:
+                continue
+            # Primary engine
+            if (_asr_model is not None
+                    and _last_asr_use_time > 0
+                    and (now - _last_asr_use_time) > _ASR_IDLE_UNLOAD_SECS):
+                with _asr_lock:
+                    # Re-check inside lock in case _switch_model touched it
+                    if _asr_model is not None:
+                        log.info(f"[IdleUnload] primary ASR idle "
+                                 f"{(now - _last_asr_use_time)/60:.1f} min - unloading")
+                        _asr_model = None
+            # Background engine (two-pass)
+            if (_bg_asr_model is not None
+                    and _last_bg_asr_use_time > 0
+                    and (now - _last_bg_asr_use_time) > _BG_IDLE_UNLOAD_SECS):
+                with _bg_asr_lock:
+                    if _bg_asr_model is not None:
+                        log.info(f"[IdleUnload] background ASR idle "
+                                 f"{(now - _last_bg_asr_use_time)/60:.1f} min - unloading")
+                        _bg_asr_model = None
+        except Exception as e:
+            log.warning(f"[IdleUnload] supervisor error (continuing): {e}")
 
 
 # ─── Two-pass: background loader / runner / callback ──────────────────────
@@ -1025,6 +1186,12 @@ def _load_bg_asr():
     if _current_engine != "moonshine":
         log.info(f"[TwoPass] primary engine is {_current_engine}; no background pass needed")
         return
+    # Idempotency: if the model is already loaded, don't waste memory loading
+    # a second instance. Important now that this function is called from
+    # multiple paths (startup, toggle, post-idle reload).
+    if _bg_asr_model is not None:
+        log.debug("[TwoPass] bg engine already loaded; skipping reload")
+        return
     try:
         t0 = time.perf_counter()
         log.info(f"[TwoPass] loading background Whisper ({WHISPER_MODEL})...")
@@ -1038,15 +1205,28 @@ def _load_bg_asr():
 
 def _run_bg_asr(audio_flat: np.ndarray, original_text: str):
     """Re-transcribe audio on the background engine. Called from a daemon thread
-    after the main paste has already happened, so we are never on the hot path."""
-    if _bg_asr_model is None or not _two_pass_enabled:
+    after the main paste has already happened, so we are never on the hot path.
+
+    v2.5.1: if the bg engine was idle-unloaded, reload it before transcribing.
+    We're already off the hot path so a reload delay here is invisible to the
+    user - they got their fast Moonshine paste seconds ago."""
+    global _bg_asr_model, _last_bg_asr_use_time
+    if not _two_pass_enabled:
         return
     try:
+        # Reload if needed (the idle supervisor may have dropped it)
+        if _bg_asr_model is None:
+            log.info("[TwoPass] bg engine was unloaded - reloading")
+            _load_bg_asr()
+            if _bg_asr_model is None:
+                # Load failed; give up silently
+                return
         with _bg_asr_lock:
             if _bg_asr_model is None:
                 return
             t0 = time.perf_counter()
             bg_text = _bg_asr_model.transcribe(audio_flat).strip()
+            _last_bg_asr_use_time = time.time()
             log.info(f"[TwoPass] bg ASR in {time.perf_counter() - t0:.2f}s: {bg_text!r}")
         _on_better_transcription(bg_text, original_text)
     except Exception as e:
@@ -1142,6 +1322,24 @@ def _set_audio_cue(profile: str):
     _save_config_key("audio_cue", profile)
     log.info(f"Audio cue set to: {profile}")
     if _widget:
+        _widget.root.after(0, _widget._rebuild_menu)
+
+
+def _set_waveform_style(style: str):
+    """Switch the recording-strip waveform renderer and persist to config.
+    The change applies on the next animation frame, so the next time the
+    user records they see the chosen style."""
+    global WAVEFORM_STYLE
+    WAVEFORM_STYLE = style
+    _save_config_key("waveform_style", style)
+    log.info(f"Waveform style set to: {style}")
+    if _widget:
+        # Clear any cached canvas items so the next draw starts fresh.
+        try:
+            _widget._canvas.delete("all")
+            _widget._wave_items = None
+        except Exception:
+            pass
         _widget.root.after(0, _widget._rebuild_menu)
 
 
@@ -1282,6 +1480,16 @@ def _get_cursor_monitor_workarea():
     contains the mouse cursor.  Falls back to the primary monitor if the
     Win32 call fails.  The work-area excludes the taskbar.
     """
+    info = _get_cursor_monitor_info()
+    return info[1] if info else None
+
+
+def _get_cursor_monitor_info():
+    """Return (hmon_handle, (x, y, w, h)) for the cursor's monitor, or None.
+    Exposing the HMONITOR handle lets callers compare monitor identity
+    instead of just coordinates - critical for avoiding spurious "monitor
+    changed" detections when only the work-area dimensions wobble (taskbar
+    autohide toggling, DPI re-init after sleep/wake, etc.)."""
     try:
         pt = _POINT()
         ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
@@ -1292,7 +1500,7 @@ def _get_cursor_monitor_workarea():
         mi.cbSize = ctypes.sizeof(_MONITORINFO)
         if ctypes.windll.user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
             left, top, right, bottom = mi.rcWork
-            return left, top, right - left, bottom - top
+            return hmon, (left, top, right - left, bottom - top)
     except Exception:
         pass
     return None
@@ -1303,34 +1511,50 @@ def _get_cursor_monitor_workarea():
 _tray_icon_cache: dict[str, Image.Image] = {}
 
 def _make_tray_image(color: str) -> Image.Image:
-    """Generate a simple filled circle for the tray icon (cached per color)."""
+    """Tray icon: brand Φ-in-circle in the per-state color.
+    v2.5.3: was a flat filled disc; now uses theme.render_mark_image so the
+    tray reads as the same brand mark the user sees in the widget and the
+    history window, just tinted to reflect state."""
     cached = _tray_icon_cache.get(color)
     if cached is not None:
         return cached
-    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    draw.ellipse([4, 4, 60, 60], fill=color)
+    # All-one-color mark: ring + Φ both painted in `color`, no inner fill.
+    # The result is a tinted Φ-in-circle silhouette that scales cleanly to
+    # any tray-icon size Windows asks for.
+    img = theme.render_mark_image(
+        64, border_color=color, glyph_color=color, fill_color=None,
+    )
     _tray_icon_cache[color] = img
     return img
 
+# Tray icon dot color per state. Brand-aligned so the icon in the system tray
+# tells the same story as the floating widget mark.
 _TRAY_COLORS = {
-    "idle":       "#2A1A0E",
-    "loading":    "#1A1A3E",
-    "recording":  "#7A3018",
-    "processing": "#6A4A18",
-    "done":       "#1A5A38",
-    "no_speech":  "#1E1610",
+    "idle":       theme.INK_MUTE,    # quiet, low-attention
+    "loading":    theme.INFO,        # cool blue — "waking up"
+    "recording":  theme.CORAL,       # primary brand action
+    "processing": theme.MUSTARD,     # jewelry — "thinking"
+    "done":       theme.CORAL_SOFT,  # success flash (brand-aligned, not green)
+    "no_speech":  theme.INK_FAINT,   # barely there
 }
 
 # Per-state waveform colours: (wave_color, glow_color, border_color)
-# Inspired by Anthropic's warm coral/terracotta brand palette.
+# v2.5.4: border color is now INK_MUTE for EVERY state. State change is
+# signaled by the waveform color itself (coral/mustard/etc), so the border
+# doesn't also need to communicate state. INK_MUTE is the standard brand
+# border color used everywhere a container needs an outline.
+#
+# Brand border standard:
+#   theme.BORDER_MED  (2px, INK_MUTE) - floating containers, recording strip,
+#                                       hover card outline
+#   theme.BORDER_THIN (1px, INK_MUTE) - inline dividers between sections
 _STATE_WAVE = {
-    "loading":    ("#6070D0", "#0A0A2E", "#282868"),   # cool indigo pulse — "waking up"
-    "recording":  ("#E07040", "#3C1A08", "#6A2E14"),   # warm coral-orange
-    "processing": ("#D4A060", "#2E1E06", "#5C3A10"),   # warm amber (thinking)
-    "done":       ("#60D890", "#0C2E1A", "#206830"),   # soft mint (complete)
-    "no_speech":  ("#2E2218", None,      "#1E160E"),   # barely visible warm gray
-    "busy":       ("#D4A060", "#2E1E06", "#5C3A10"),   # amber flash: "not ready yet"
+    "loading":    (theme.INFO,        theme.INK_SOFT, theme.INK_MUTE),
+    "recording":  (theme.CORAL,       theme.INK_SOFT, theme.INK_MUTE),
+    "processing": (theme.MUSTARD,     theme.INK_SOFT, theme.INK_MUTE),
+    "done":       (theme.CORAL_SOFT,  theme.INK_SOFT, theme.INK_MUTE),
+    "no_speech":  (theme.INK_FAINT,   None,           theme.INK_MUTE),
+    "busy":       (theme.MUSTARD,     theme.INK_SOFT, theme.INK_MUTE),
 }
 
 # ─── Floating status widget ───────────────────────────────────────────────────
@@ -1344,23 +1568,39 @@ _STATE_WAVE = {
 #   done       → all bars high for ~900 ms, then auto-return to idle
 #   no_speech  → flat near-zero bars, auto-return after 1.5 s
 
-_W_WAVE,    _H_WAVE = 140, 36   # hold-to-talk: waveform only
-_W_WAVE_HF, _H_WAVE = 196, 36   # hands-free:  ✕ + waveform + ● pill
-_N_BARS  = 13
+# v2.5.4: 44 -> 40 for a more compact strip. 40px gives the 18px button
+# glyphs comfortable room (11px above/below) without feeling chunky. Width
+# stays at 240 since horizontal proportions were already right.
+_W_WAVE,    _H_WAVE = 168, 40   # hold-to-talk: waveform only
+_W_WAVE_HF, _H_WAVE = 240, 40   # hands-free:  ✕ + waveform + Φ
+_N_BARS  = 15
 _BAR_W   = 4
 _BAR_GAP = 2
 
 # ── Appearance — driven by config.json "appearance" section ───────────────────
 _ap = cfg.get("appearance", {})
 
-_BG_ACTIVE    = _ap.get("active_bg",           "#1C1612")   # warm near-black
-_BORDER_COLOR = _ap.get("active_border_color", "#6A2E14")   # fallback; overridden per-state
-_BORDER_PX    = int(_ap.get("active_border_px",  5))
-_ACTIVE_ALPHA = float(_ap.get("active_alpha",    0.82))
+# Recording strip chrome. INK = brand primary dark surface so the strip
+# matches the rest of the brand. Border CORAL overridden per-state via
+# _STATE_WAVE for active states.
+_BG_ACTIVE    = theme.INK
+_BORDER_COLOR = theme.CORAL
+_BORDER_PX    = int(_ap.get("active_border_px",  2))
+_ACTIVE_ALPHA = float(_ap.get("active_alpha",    0.95))
 
-_IDLE_COLOR   = _ap.get("idle_color", "#3A1E0C")   # dim warm ember — barely there
+_IDLE_COLOR   = theme.CORAL   # unused now; mark colors come from theme tokens
 _IDLE_ALPHA   = float(_ap.get("idle_alpha", 0.45))
-_W_DOT = _H_DOT = int(_ap.get("idle_size", 24))
+# v2.5.2: 36px gives Φ-in-circle a premium coin look. Dark INK backdrop
+# inside the ring eliminates the anti-alias fringing that v2.5.1 had on
+# the transparent-key background.
+_W_DOT = _H_DOT = int(_ap.get("idle_size", 36))
+
+# Windows-only "transparent color" trick: any pixel rendered in this exact
+# RGB on a Toplevel becomes 100% transparent on screen. We use a magenta
+# that the brand palette never produces, so nothing legitimate disappears.
+# This is what lets the widget mark appear as a floating circle with no
+# visible square Canvas backdrop, while staying fully opaque (no fuzzy alpha).
+_TRANSPARENT_KEY = "#ff00ff"
 
 
 class StatusWidget:
@@ -1370,6 +1610,25 @@ class StatusWidget:
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
         self.root.resizable(False, False)
+        # v2.5.5: -transparentcolor is no longer used. It was unreliable
+        # across display drivers / color profiles - magenta would leak
+        # through as visible pink corners on some setups. Instead, the
+        # widget is now a small dark INK badge with DWM-rounded corners
+        # (squircle on Win11). The brand mark sits inside; the badge area
+        # outside the mark visually fades into dark desktops.
+        self.root.configure(bg=theme.INK)
+
+        # Hide from taskbar AND Alt-Tab. The widget lives in the system
+        # tray and floats over the desktop - it is NOT an app entry. The
+        # -toolwindow attribute sets WS_EX_TOOLWINDOW at the Win32 level,
+        # which is the standard way to tell Windows "this is a floating
+        # utility surface, not a window to be listed alongside Word/Chrome".
+        # The history window does NOT get this treatment - it's a real
+        # window the user opens and switches to.
+        try:
+            self.root.attributes("-toolwindow", True)
+        except Exception:
+            pass
 
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
@@ -1378,20 +1637,57 @@ class StatusWidget:
         # Respect a user-dragged position from a previous session, if any.
         # Heartbeat's auto-anchor-to-cursor-monitor will skip while _user_placed
         # is True, so the widget stays exactly where the user put it.
+        #
+        # Bounds check: positions saved under v2.4 (DPI-unaware coordinate
+        # system) may now land off-screen with v2.5's per-monitor DPI
+        # awareness. Validate against virtual-screen bounds; fall back to
+        # auto-anchor if the saved coords are outside any monitor.
         self._user_placed = False
+        # Track which physical monitor the dot is anchored to. Initialized
+        # by the first heartbeat call to _anchor_to_monitor. Used to suppress
+        # spurious re-anchors when the same monitor's work-area dimensions
+        # change (taskbar / DPI / wake) - we only move if the monitor IDENTITY
+        # (HMONITOR handle) changes.
+        self._anchored_hmon = None
+        # Strike counter for the offscreen-rescue debounce (3 consecutive
+        # offscreen heartbeats required before reset_position fires).
+        self._offscreen_strike_count = 0
         saved_pos = cfg.get("widget_position")
         if isinstance(saved_pos, dict) and "x" in saved_pos and "y" in saved_pos:
             try:
-                self._anchor_x = int(saved_pos["x"])
-                self._anchor_y = int(saved_pos["y"])
-                self._user_placed = True
-                log.info(f"Widget: restored saved position ({self._anchor_x}, {self._anchor_y})")
-            except Exception:
-                pass
+                px = int(saved_pos["x"])
+                py = int(saved_pos["y"])
+                # Get virtual-screen bounds (covers all monitors).
+                gm = ctypes.windll.user32.GetSystemMetrics
+                vx, vy = gm(76), gm(77)            # SM_X/YVIRTUALSCREEN
+                vw, vh = gm(78), gm(79)            # SM_CX/CYVIRTUALSCREEN
+                # Allow a 50-pixel tolerance: anchor is bottom-right corner
+                # so it can sit a bit past virtual bounds and still be visible
+                in_bounds = (
+                    vx - 50 <= px <= vx + vw + 50
+                    and vy - 50 <= py <= vy + vh + 50
+                )
+                if in_bounds:
+                    self._anchor_x = px
+                    self._anchor_y = py
+                    self._user_placed = True
+                    log.info(f"Widget: restored saved position ({self._anchor_x}, {self._anchor_y})")
+                else:
+                    log.info(f"Widget: saved position ({px}, {py}) outside virtual screen "
+                             f"({vx},{vy} {vw}x{vh}) — falling back to auto-anchor")
+            except Exception as e:
+                log.debug(f"Widget: position load failed ({e}); auto-anchoring")
 
-        # Idle dot (hidden when active)
-        self._dot = tk.Label(self.root, text="◉", font=("Segoe UI", 13, "bold"),
-                             padx=0, pady=0)
+        # Brand mark: Φ inside a coral circle. Replaces the simple filled
+        # dot from v2.4. Drawn on a Canvas so we can compose ring + glyph
+        # in any state colour. State-painting code calls _redraw_mark(...)
+        # instead of self._dot.config(text=, fg=) - functional API.
+        self._dot = tk.Canvas(
+            self.root,
+            width=_W_DOT, height=_H_DOT,
+            bg=_IDLE_COLOR, highlightthickness=0,
+            borderwidth=0,
+        )
 
         # Inner frame — sits 1 px inside the root window so the root bg
         # shows through as a thin border in active states
@@ -1399,31 +1695,65 @@ class StatusWidget:
 
         # Waveform canvas (lives inside _inner; packed dynamically per state)
         self._canvas = tk.Canvas(self._inner, width=_W_WAVE - 2 * _BORDER_PX,
-                                 height=_H_WAVE, bg=_BG_ACTIVE, highlightthickness=0)
+                                 height=_H_WAVE, bg=theme.INK, highlightthickness=0)
 
-        # ── Hands-free side buttons — only packed when _hands_free is True ──
-        # Left: cancel (discard recording, return to idle)
+        # ── Hands-free side buttons ─────────────────────────────────────────
+        # Both buttons are rendered as PIL-rasterized brand glyphs displayed
+        # in identical-sized tk.Labels. Same widget type, same rendering
+        # pipeline, same bounding box -> automatic optical alignment with
+        # the waveform's vertical center. Hover states swap the PhotoImage
+        # to a different color rather than re-rendering or changing fg.
+        #
+        # Glyph dimensions: 18×18 px inside a Label padded 10px horizontal.
+        # Total button width ~38px each, leaving ~164px for the waveform
+        # in a 240px strip.
+        _BTN_GLYPH_PX  = 18
+        _BTN_PAD_X     = 10
+
+        # Pre-cache all four photos (cancel resting/hover, submit resting/
+        # hover). theme.get_glyph_photo caches by (name, size, color) so
+        # repeat calls are free.
+        self._btn_cancel_rest = theme.get_glyph_photo("close", _BTN_GLYPH_PX, theme.INK_FAINT)
+        self._btn_cancel_hov  = theme.get_glyph_photo("close", _BTN_GLYPH_PX, theme.PAPER)
+        self._btn_stop_rest   = theme.get_glyph_photo("phi",   _BTN_GLYPH_PX, theme.CORAL)
+        self._btn_stop_hov    = theme.get_glyph_photo("phi",   _BTN_GLYPH_PX, theme.CORAL_SOFT)
+
+        # Left: cancel/discard. Custom close glyph, INK_FAINT resting,
+        # PAPER on hover. Quiet so it doesn't compete with the submit
+        # action, but legible.
         self._btn_cancel = tk.Label(
-            self._inner, text="✕", font=("Segoe UI", 10, "bold"),
-            padx=8, pady=0, cursor="hand2",
-            bg=_BG_ACTIVE, fg="#4A2E1A",
+            self._inner, image=self._btn_cancel_rest,
+            bg=theme.INK, cursor="hand2",
+            padx=_BTN_PAD_X, pady=0, borderwidth=0, highlightthickness=0,
         )
         self._btn_cancel.bind("<ButtonRelease-1>", lambda e: _cancel_recording())
-        self._btn_cancel.bind("<Enter>", lambda e: self._btn_cancel.config(fg="#E07040"))
-        self._btn_cancel.bind("<Leave>", lambda e: self._btn_cancel.config(fg="#4A2E1A"))
+        self._btn_cancel.bind(
+            "<Enter>", lambda e: self._btn_cancel.config(image=self._btn_cancel_hov)
+        )
+        self._btn_cancel.bind(
+            "<Leave>", lambda e: self._btn_cancel.config(image=self._btn_cancel_rest)
+        )
 
-        # Right: stop + send (same as releasing Ctrl+Win in hold mode)
+        # Right: stop + send. Brand Φ rendered via the same PIL pipeline
+        # as the close glyph, so the two icons share AA quality and visual
+        # weight. CORAL resting, CORAL_SOFT on hover (standard brand hover).
         self._btn_stop = tk.Label(
-            self._inner, text="⏺", font=("Segoe UI Symbol", 13),
-            padx=6, pady=0, cursor="hand2",
-            bg=_BG_ACTIVE, fg="#CC3A1A",
+            self._inner, image=self._btn_stop_rest,
+            bg=theme.INK, cursor="hand2",
+            padx=_BTN_PAD_X, pady=0, borderwidth=0, highlightthickness=0,
         )
         self._btn_stop.bind("<ButtonRelease-1>", lambda e: _stop_and_send())
-        self._btn_stop.bind("<Enter>", lambda e: self._btn_stop.config(fg="#FF5533"))
-        self._btn_stop.bind("<Leave>", lambda e: self._btn_stop.config(fg="#CC3A1A"))
+        self._btn_stop.bind(
+            "<Enter>", lambda e: self._btn_stop.config(image=self._btn_stop_hov)
+        )
+        self._btn_stop.bind(
+            "<Leave>", lambda e: self._btn_stop.config(image=self._btn_stop_rest)
+        )
 
-        # Right-click context menu — built (and rebuilt after model switches) by _rebuild_menu()
-        self._menu = tk.Menu(self.root, tearoff=0)
+        # Right-click context menu - built (and rebuilt after model switches)
+        # by _rebuild_menu(). Brand-styled via _styled_menu so colors match
+        # the rest of the app instead of falling back to Windows defaults.
+        self._menu = self._styled_menu(self.root)
         self._rebuild_menu()
 
         for w in (self.root, self._dot, self._inner, self._canvas,
@@ -1491,45 +1821,74 @@ class StatusWidget:
     _MARGIN_Y = 60   # px from the bottom edge
 
     def _anchor_to_monitor(self):
-        """Position the widget at the bottom-right of whichever monitor
-        the mouse cursor is on.  Called every 500 ms by the heartbeat.
+        """Re-anchor the dot to the bottom-right of whichever monitor the
+        cursor is currently on. Called from the heartbeat.
 
-        Skipped entirely when the user has manually dragged the widget.
-        Manual placement always wins until they explicitly reset position
-        via the right-click menu."""
-        if getattr(self, "_user_placed", False):
+        v2.5.4 fix: cross-monitor cursor movement now overrides the
+        _user_placed flag. The old logic kept _user_placed sticky forever
+        once set, which silently broke "follow me to another screen" for
+        anyone who had a saved position or had ever dragged the widget.
+
+        Semantics now:
+          - Same monitor as before  -> do nothing (respects intra-monitor
+            drag placement, prevents post-wake jitter)
+          - DIFFERENT physical monitor than current anchor -> follow,
+            clearing _user_placed because the user has explicitly moved
+            attention to a new screen
+          - widget_follow_cursor=False in config -> never follow
+
+        Identity comparison is by HMONITOR handle, not coordinates, so
+        transient workarea changes (taskbar autohide, DPI re-init during
+        sleep/wake) on the SAME monitor don't trigger movement.
+        """
+        if not _WIDGET_FOLLOW_CURSOR:
             return
-        area = _get_cursor_monitor_workarea()
-        if area is None:
-            return  # keep current position
-        mx, my, mw, mh = area
-        new_ax = mx + mw - self._MARGIN_X
-        new_ay = my + mh - self._MARGIN_Y
-        # Only reposition if the anchor actually changed (avoids flicker)
-        if new_ax != self._anchor_x or new_ay != self._anchor_y:
-            self._anchor_x = new_ax
-            self._anchor_y = new_ay
-            w = self.root.winfo_width()
-            h = self.root.winfo_height()
-            self.root.geometry(f"{w}x{h}+{new_ax - w}+{new_ay - h}")
+        info = _get_cursor_monitor_info()
+        if info is None:
+            return  # can't tell - keep current position
+        hmon, (mx, my, mw, mh) = info
+        # Same monitor as current anchor -> respect user placement on this
+        # screen, do nothing.
+        if hmon == getattr(self, "_anchored_hmon", None):
+            return
+        # Different monitor. Even if the user previously dragged to a custom
+        # position on the OLD monitor, follow them to the new monitor's
+        # bottom-right. They've explicitly moved attention; we don't strand
+        # the widget behind. Clear _user_placed so subsequent same-monitor
+        # heartbeats don't try to snap back.
+        log.debug(f"[Widget] cursor on new monitor (hmon={hmon}); following")
+        self._anchored_hmon = hmon
+        self._user_placed = False
+        self._anchor_x = mx + mw - self._MARGIN_X
+        self._anchor_y = my + mh - self._MARGIN_Y
+        w = self.root.winfo_width()
+        h = self.root.winfo_height()
+        self.root.geometry(f"{w}x{h}+{self._anchor_x - w}+{self._anchor_y - h}")
 
     def _is_offscreen(self) -> bool:
         """Return True if the widget is positioned outside all visible monitors."""
         try:
-            x = self.root.winfo_x()
-            y = self.root.winfo_y()
+            # Use ROOTX/ROOTY (absolute screen coords) - winfo_x on an
+            # overrideredirect Toplevel can return parent-relative coords
+            # which are useless for off-screen detection.
+            x = self.root.winfo_rootx()
+            y = self.root.winfo_rooty()
             w = self.root.winfo_width()
             h = self.root.winfo_height()
-            # Check if at least part of the widget is on any monitor
-            area = _get_cursor_monitor_workarea()
-            if area is None:
-                return False   # can't tell — assume OK
-            # Also check against primary screen as a sanity bound
-            sw = self.root.winfo_screenwidth()
-            sh = self.root.winfo_screenheight()
-            # Widget is offscreen if its right edge is < -w (way off left)
-            # or its left edge is past all screens, or similarly for Y
-            if x + w < -50 or x > sw + 500 or y + h < -50 or y > sh + 500:
+            # Use VIRTUAL SCREEN bounds (all monitors combined), not
+            # winfo_screenwidth/height which return primary only. A widget
+            # on a secondary monitor to the right would have x > primary_w,
+            # which the old check incorrectly treated as "off screen" and
+            # repeatedly reset to primary. Real fix: check against the
+            # bounding box of ALL physical monitors.
+            gm = ctypes.windll.user32.GetSystemMetrics
+            vx, vy = gm(76), gm(77)            # SM_X/YVIRTUALSCREEN
+            vw, vh = gm(78), gm(79)            # SM_CX/CYVIRTUALSCREEN
+            # Widget is offscreen if it has no overlap with the virtual screen.
+            # Use a 50 px slop in case window decorations push us just past edges.
+            right, bottom = x + w, y + h
+            if (right < vx - 50 or x > vx + vw + 50 or
+                    bottom < vy - 50 or y > vy + vh + 50):
                 return True
         except Exception:
             pass
@@ -1582,24 +1941,42 @@ class StatusWidget:
             self.root.attributes("-topmost", True)   # fallback
 
     def _start_topmost_heartbeat(self):
-        """Permanent 500 ms heartbeat: keeps the widget above everything
-        AND follows the cursor's monitor (bottom-right corner anchoring).
+        """Permanent heartbeat: keeps the widget always-on-top, optionally
+        re-anchors to cursor monitor (off by default since v2.5.1), and
+        recovers the dot if it genuinely drifts off all screens.
 
-        Wrapped in try/except so the heartbeat chain NEVER breaks — if it
+        Wrapped in try/except so the heartbeat chain NEVER breaks - if it
         stops rescheduling, the widget becomes unreachable (no taskbar button).
         """
         try:
             self._force_topmost()
             self._anchor_to_monitor()
-            # Auto-recover if the widget drifted offscreen (monitor disconnect,
-            # resolution change, DPI switch, etc.)
+            # Auto-recover if the widget drifted offscreen.
+            # v2.5.1: debounce. During sleep/wake transitions Windows may
+            # briefly report widget coords that LOOK off-screen because DPI
+            # is being re-applied or monitor enumeration is in flux. We now
+            # require 3 consecutive offscreen reads before firing the rescue
+            # reset - that gives transient post-wake states ~4.5s to settle.
             if self._is_offscreen():
-                log.warning("Widget detected offscreen — resetting position")
-                self.reset_position()
+                self._offscreen_strike_count = getattr(self, "_offscreen_strike_count", 0) + 1
+                if self._offscreen_strike_count >= 3:
+                    log.warning(
+                        f"Widget detected offscreen for {self._offscreen_strike_count} "
+                        f"consecutive heartbeats — resetting position"
+                    )
+                    self.reset_position()
+                    self._offscreen_strike_count = 0
+            else:
+                # Reset the strike counter as soon as we see widget on-screen
+                self._offscreen_strike_count = 0
         except Exception as e:
             log.error(f"Heartbeat error (recovering): {e}")
         # ALWAYS reschedule — this line must never be skipped
-        self.root.after(500, self._start_topmost_heartbeat)
+        # Heartbeat runs at 1500ms (was 500ms in v2.4 and earlier). Three checks
+        # per second was wasteful - topmost rarely needs re-asserting that often
+        # and monitor anchoring happens once per cursor-monitor transition.
+        # 1.5s is fast enough to feel snappy on multi-monitor switches.
+        self.root.after(1500, self._start_topmost_heartbeat)
 
     def _apply_state(self, state: str, hands_free_snap: bool = False):
         prev_state  = self._state
@@ -1615,16 +1992,18 @@ class StatusWidget:
 
         if state == "idle":
             self._inner.pack_forget()
-            # Amber dot while correction-watch is armed — signals "press Enter to teach"
-            idle_color = "#D4A060" if _correction_active else _IDLE_COLOR
-            self._dot.config(bg=idle_color, fg=idle_color)
             self._dot.pack(fill="both", expand=True)
-            self.root.config(bg=idle_color)
-            self.root.attributes("-alpha", _IDLE_ALPHA)
+            # v2.5.1: full opacity in idle state. Transparency is handled by
+            # the -transparentcolor key (magenta pixels invisible), so the
+            # actual painted brand mark stays crisp. Old behavior used alpha
+            # to fade the dot which made it muddy.
+            self.root.attributes("-alpha", 1.0)
             self.root.geometry(
                 f"{_W_DOT}x{_H_DOT}"
                 f"+{self._anchor_x - _W_DOT}+{self._anchor_y - _H_DOT}"
             )
+            # Defer one tick so the Canvas has its dimensions before drawing
+            self.root.after(0, self._refresh_idle_color)
         else:
             # Use the captured hands_free value (passed from set_state) so the
             # layout matches what was true at the moment of the call.
@@ -1725,26 +2104,41 @@ class StatusWidget:
 
         self._anim_job = self.root.after(80, self._animate)
 
+    # ── Waveform renderers ───────────────────────────────────────────────
+    # Each style draws the same `heights` data (15 floats 0..1 representing
+    # the audio envelope) in a different visual idiom. Switching styles is
+    # a config setting (WAVEFORM_STYLE) exposed through the right-click
+    # menu. _draw_bars is the legacy entry-point that dispatches to whichever
+    # renderer is active so callers in _animate don't need to know the choice.
+
     def _draw_bars(self, heights, color, glow=None):
-        """Draw a smooth filled waveform with an optional glow halo.
+        """Dispatch the configured waveform style for the current frame."""
+        dispatch = {
+            "wave_filled":       self._draw_wave_filled,
+            "bars_classic":      self._draw_bars_classic,
+            "bars_mirror":       self._draw_bars_mirror,
+            "dots":              self._draw_dots,
+            "line_oscilloscope": self._draw_line_oscilloscope,
+            "blocks_brutalist":  self._draw_blocks_brutalist,
+        }
+        fn = dispatch.get(WAVEFORM_STYLE, self._draw_bars_mirror)
+        # Clear-and-recreate every frame. Cheap for 15-element scenes at
+        # ~12 fps and avoids any cross-style state when the user switches.
+        self._canvas.delete("all")
+        fn(heights, color, glow)
 
-        Two layers when glow is given:
-          1. Glow halo  — polygon scaled to 1.5× amplitude, filled with glow colour
-          2. Core wave  — polygon at normal amplitude, filled with the main colour
-        The result looks like a lit neon tube on a dark background.
-
-        Uses cached canvas item IDs to update coordinates instead of
-        delete-and-recreate on every frame (called every 80 ms).
-        """
+    def _wave_geom(self, heights):
+        """Common geometry helper. Returns (canvas, cw, ch, cy, max_amp, n)."""
         c  = self._canvas
         cw = c.winfo_width()  or (_W_WAVE - 18)
         ch = c.winfo_height() or _H_WAVE
+        return c, cw, ch, ch / 2, max(1.0, (ch - 6) / 2), len(heights)
 
-        n       = len(heights)
-        cy      = ch / 2
-        max_amp = max(1.0, (ch - 6) / 2)
+    def _draw_wave_filled(self, heights, color, glow=None):
+        """Smooth filled wave - the original v2.x look. Optional glow halo."""
+        c, cw, ch, cy, max_amp, n = self._wave_geom(heights)
 
-        def _make_poly(scale: float):
+        def _poly(scale):
             top, bot = [], []
             for i, h in enumerate(heights):
                 x   = 2 + (i / max(n - 1, 1)) * (cw - 4)
@@ -1753,32 +2147,124 @@ class StatusWidget:
                 bot.append((x, cy + amp))
             return [v for pt in top for v in pt] + [v for pt in reversed(bot) for v in pt]
 
-        # Determine how many polygon layers we need (glow1, glow2, core)
-        need_glow = glow is not None
-        expected = 3 if need_glow else 1
-
-        # Lazily create or reset cached item IDs
-        if not hasattr(self, "_poly_ids") or len(self._poly_ids) != expected:
-            c.delete("all")
-            self._poly_ids = []
-            if need_glow:
-                self._poly_ids.append(c.create_polygon(0, 0, smooth=True, splinesteps=32, outline=""))
-                self._poly_ids.append(c.create_polygon(0, 0, smooth=True, splinesteps=32, outline=""))
-            self._poly_ids.append(c.create_polygon(0, 0, smooth=True, splinesteps=32, outline=""))
-
-        idx = 0
-        if need_glow:
+        if glow is not None:
             for scale, fill in ((1.5, glow), (1.15, glow)):
-                pts = _make_poly(scale)
+                pts = _poly(scale)
                 if len(pts) >= 6:
-                    c.coords(self._poly_ids[idx], *pts)
-                    c.itemconfig(self._poly_ids[idx], fill=fill)
-                idx += 1
-
-        pts = _make_poly(1.0)
+                    c.create_polygon(*pts, smooth=True, splinesteps=32,
+                                     fill=fill, outline="")
+        pts = _poly(1.0)
         if len(pts) >= 6:
-            c.coords(self._poly_ids[idx], *pts)
-            c.itemconfig(self._poly_ids[idx], fill=color)
+            c.create_polygon(*pts, smooth=True, splinesteps=32,
+                             fill=color, outline="")
+
+    def _draw_bars_classic(self, heights, color, glow=None):
+        """Vertical pills from baseline. Classic equalizer."""
+        c, cw, ch, cy, max_amp, n = self._wave_geom(heights)
+        bar_w = 6
+        total = n * bar_w
+        gap   = max(2, (cw - total) // (n + 1))
+        x = gap
+        for h in heights:
+            amp = max(0.05, h) * max_amp
+            c.create_oval(x, cy - amp, x + bar_w, cy + amp,
+                          fill=color, outline="")
+            x += bar_w + gap
+
+    def _draw_bars_mirror(self, heights, color, glow=None):
+        """Center-mirrored bars with a small gap. Premium audio-meter look."""
+        c, cw, ch, cy, max_amp, n = self._wave_geom(heights)
+        bar_w = 5
+        total = n * bar_w
+        gap   = max(2, (cw - total) // (n + 1))
+        center_gap = 2
+        x = gap
+        r = bar_w / 2
+        for h in heights:
+            amp = max(0.05, h) * max_amp
+            # Top pill
+            c.create_rectangle(x, cy - amp, x + bar_w, cy - center_gap,
+                               fill=color, outline="")
+            c.create_oval(x, cy - amp - r, x + bar_w, cy - amp + r,
+                          fill=color, outline="")
+            # Bottom pill
+            c.create_rectangle(x, cy + center_gap, x + bar_w, cy + amp,
+                               fill=color, outline="")
+            c.create_oval(x, cy + amp - r, x + bar_w, cy + amp + r,
+                          fill=color, outline="")
+            x += bar_w + gap
+
+    def _draw_dots(self, heights, color, glow=None):
+        """Pulsing dots whose radius tracks amplitude."""
+        c, cw, ch, cy, max_amp, n = self._wave_geom(heights)
+        spacing = (cw - 12) / max(n - 1, 1)
+        for i, h in enumerate(heights):
+            x = 6 + i * spacing
+            r = 1.2 + max(0.05, h) * 7.5
+            c.create_oval(x - r, cy - r, x + r, cy + r,
+                          fill=color, outline="")
+
+    def _draw_line_oscilloscope(self, heights, color, glow=None):
+        """Thin oscilloscope-style zigzag line through the data points."""
+        c, cw, ch, cy, max_amp, n = self._wave_geom(heights)
+        pts = []
+        for i, h in enumerate(heights):
+            x = 4 + (i / max(n - 1, 1)) * (cw - 8)
+            sign = 1 if i % 2 == 0 else -1
+            y = cy + sign * max(0.05, h) * max_amp * 0.85
+            pts.append((x, y))
+        # Stroke
+        flat = [v for p in pts for v in p]
+        if len(flat) >= 4:
+            c.create_line(*flat, fill=color, width=2, capstyle="round",
+                          joinstyle="round")
+        # Peak dots
+        for x, y in pts:
+            c.create_oval(x - 1.5, y - 1.5, x + 1.5, y + 1.5,
+                          fill=color, outline="")
+
+    def _draw_blocks_brutalist(self, heights, color, glow=None):
+        """Segmented LED-style stacked rectangles. Editorial / brutalist."""
+        c, cw, ch, cy, max_amp, n = self._wave_geom(heights)
+        bar_w = 7
+        total = n * bar_w
+        gap   = max(2, (cw - total) // (n + 1))
+        seg_h = 3
+        seg_gap = 1
+        x = gap
+        for h in heights:
+            amp = max(0.05, h) * max_amp
+            n_segs = max(1, int(amp / (seg_h + seg_gap)))
+            for s in range(n_segs):
+                y1 = cy - (s + 1) * (seg_h + seg_gap) + seg_gap
+                y2 = y1 + seg_h
+                c.create_rectangle(x, y1, x + bar_w, y2,
+                                   fill=color, outline="")
+                # Mirror below the center line
+                c.create_rectangle(x, ch - y2, x + bar_w, ch - y1,
+                                   fill=color, outline="")
+            x += bar_w + gap
+
+    def _styled_menu(self, parent) -> tk.Menu:
+        """Construct a brand-styled tk.Menu (Tk lets us override the OS
+        defaults). Used for the main right-click menu and every cascade.
+
+        Brand palette applied:
+          - bg               INK         (dark surface)
+          - fg               PAPER       (warm light text)
+          - activebackground CORAL       (highlight on hover)
+          - activeforeground INK         (dark text on coral)
+          - bd=0             flat        (no Windows raised border)
+        """
+        return tk.Menu(
+            parent, tearoff=0,
+            bg=theme.INK, fg=theme.PAPER,
+            activebackground=theme.CORAL,
+            activeforeground=theme.INK,
+            activeborderwidth=0, bd=0,
+            font=(theme.FONT_FAMILY, 9),
+            relief="flat",
+        )
 
     def _rebuild_menu(self):
         """Rebuild the right-click context menu.
@@ -1786,14 +2272,17 @@ class StatusWidget:
         m = self._menu
         m.delete(0, "end")
 
-        m.add_command(label="cait-whisper", state="disabled",
-                      font=("Segoe UI", 10, "bold"))
+        # Brand header: Tk system menus can't compose multiple text styles,
+        # so the lockup appears as plain text. The Settings tab in the
+        # history window carries the styled "Cait. whisper" lockup.
+        m.add_command(label="Cait. whisper", state="disabled",
+                      font=(theme.FONT_FAMILY_TIGHT, 10, "bold"))
         m.add_separator()
 
         # ── Switch Model cascade ──────────────────────────────────────────────
-        switch_menu = tk.Menu(m, tearoff=0)
+        switch_menu = self._styled_menu(m)
 
-        moon_menu = tk.Menu(switch_menu, tearoff=0)
+        moon_menu = self._styled_menu(switch_menu)
         for mdl in _MOONSHINE_MODELS:
             active = (_current_engine == "moonshine" and _current_model == mdl)
             lbl    = f"✓  {mdl}" if active else f"    {mdl}"
@@ -1802,7 +2291,7 @@ class StatusWidget:
                 command=lambda e="moonshine", mo=mdl: _switch_model(e, mo),
             )
 
-        whis_menu = tk.Menu(switch_menu, tearoff=0)
+        whis_menu = self._styled_menu(switch_menu)
         for mdl in _WHISPER_MODELS:
             active = (_current_engine == "whisper" and _current_model == mdl)
             lbl    = f"✓  {mdl}" if active else f"    {mdl}"
@@ -1811,7 +2300,7 @@ class StatusWidget:
                 command=lambda e="whisper", mo=mdl: _switch_model(e, mo),
             )
 
-        para_menu = tk.Menu(switch_menu, tearoff=0)
+        para_menu = self._styled_menu(switch_menu)
         if not _nemo_available:
             para_menu.add_command(
                 label="✗  NeMo not installed — re-run setup.bat",
@@ -1836,10 +2325,100 @@ class StatusWidget:
         para_label = "Parakeet ⚡" if _nemo_available else "Parakeet ⚡  (not installed)"
         switch_menu.add_cascade(label=para_label, menu=para_menu)
         m.add_cascade(label="Switch Model  ▸", menu=switch_menu)
+
+        # ── Re-transcribe last (try a different engine on the saved audio) ────
+        # Disabled when no audio is cached. Lists every model so users can
+        # easily flip from Moonshine to Whisper after a hallucination.
+        retry_menu = self._styled_menu(m)
+        with _last_frames_lock:
+            has_cached = bool(_last_frames)
+            cached_secs = sum(len(f) for f in _last_frames) / SAMPLE_RATE if _last_frames else 0
+        if has_cached:
+            # Quick "same engine" option at the top (also Shift+Alt+T)
+            retry_menu.add_command(
+                label=f"Same engine  (Shift+Alt+T)  ·  {cached_secs:.1f}s cached",
+                command=lambda: threading.Thread(
+                    target=lambda: _retranscribe_last("", ""),
+                    daemon=True, name="retranscribe-menu",
+                ).start(),
+            )
+            retry_menu.add_separator()
+            for mdl in _MOONSHINE_MODELS:
+                retry_menu.add_command(
+                    label=f"Moonshine · {mdl}",
+                    command=lambda mo=mdl: threading.Thread(
+                        target=lambda m=mo: _retranscribe_last("moonshine", m),
+                        daemon=True, name="retranscribe-menu",
+                    ).start(),
+                )
+            for mdl in _WHISPER_MODELS:
+                retry_menu.add_command(
+                    label=f"Whisper · {mdl}",
+                    command=lambda mo=mdl: threading.Thread(
+                        target=lambda m=mo: _retranscribe_last("whisper", m),
+                        daemon=True, name="retranscribe-menu",
+                    ).start(),
+                )
+            if _nemo_available:
+                for mdl in _PARAKEET_MODELS:
+                    retry_menu.add_command(
+                        label=f"Parakeet · {mdl}",
+                        command=lambda mo=mdl: threading.Thread(
+                            target=lambda m=mo: _retranscribe_last("parakeet", m),
+                            daemon=True, name="retranscribe-menu",
+                        ).start(),
+                    )
+        else:
+            retry_menu.add_command(label="    (no recording cached yet)", state="disabled")
+        m.add_cascade(label="Re-transcribe last  ▸", menu=retry_menu)
+
+        # ── Microphone picker ─────────────────────────────────────────────────
+        # Lets the user switch input devices without restarting the app or
+        # changing the Windows default. Use case: laptop mic in quiet rooms,
+        # Jabra/AirPods with noise cancellation in cafes, etc.
+        mic_menu = self._styled_menu(m)
+        try:
+            devices = _list_input_devices()
+        except Exception as e:
+            log.warning(f"[Menu] could not list input devices: {e}")
+            devices = []
+        # Always offer "System default" as the top option
+        default_active = (not INPUT_DEVICE)
+        mic_menu.add_command(
+            label=("✓  System default" if default_active else "    System default"),
+            command=lambda: threading.Thread(
+                target=_switch_input_device, args=("",),
+                daemon=True, name="mic-switch",
+            ).start(),
+        )
+        mic_menu.add_separator()
+        for dev in devices:
+            # "Active" = the configured name is a substring of this device name
+            active = bool(INPUT_DEVICE) and INPUT_DEVICE.lower() in dev["name"].lower()
+            prefix = "✓  " if active else "    "
+            # Truncate for display; include a hint when the device is the
+            # Windows default so users can orient themselves.
+            display = dev["name"]
+            if len(display) > 42:
+                display = display[:39] + "..."
+            if dev.get("is_default"):
+                display += "  (default)"
+            mic_menu.add_command(
+                label=prefix + display,
+                # Capture the name as a short substring that will still
+                # resolve correctly next launch, even if hostapi changes.
+                command=lambda n=dev["name"][:30]: threading.Thread(
+                    target=_switch_input_device, args=(n,),
+                    daemon=True, name="mic-switch",
+                ).start(),
+            )
+        if not devices:
+            mic_menu.add_command(label="    (no input devices found)", state="disabled")
+        m.add_cascade(label="Microphone  ▸", menu=mic_menu)
         m.add_separator()
 
         # ── Audio cues submenu ────────────────────────────────────────────────
-        cue_menu = tk.Menu(m, tearoff=0)
+        cue_menu = self._styled_menu(m)
         for profile in ("subtle", "chime", "click", "scifi", "off"):
             active = (AUDIO_CUE == profile)
             lbl    = f"✓  {profile}" if active else f"    {profile}"
@@ -1853,6 +2432,19 @@ class StatusWidget:
         cue_menu.add_command(label="    ▶  Test done cue",
                              command=lambda: _play_cue("done",  AUDIO_CUE if AUDIO_CUE != "off" else "subtle"))
         m.add_cascade(label="Audio Cues  ▸", menu=cue_menu)
+
+        # ── Waveform style submenu ────────────────────────────────────────────
+        # User-pickable visual rhythm for the active recording strip. Each
+        # entry maps to a _draw_* method on StatusWidget; see WAVEFORM_STYLES.
+        wave_menu = self._styled_menu(m)
+        for style_id, style_label in WAVEFORM_STYLES:
+            active = (WAVEFORM_STYLE == style_id)
+            lbl    = f"✓  {style_label}" if active else f"    {style_label}"
+            wave_menu.add_command(
+                label=lbl,
+                command=lambda s=style_id: _set_waveform_style(s),
+            )
+        m.add_cascade(label="Waveform  ▸", menu=wave_menu)
         m.add_separator()
 
         # ── History & Dictionary ──────────────────────────────────────────────
@@ -1885,6 +2477,15 @@ class StatusWidget:
         m.add_command(
             label="Two-Pass: ON" if _two_pass_enabled else "Two-Pass: OFF",
             command=_toggle_two_pass,
+        )
+
+        # ── Retroactive buffer toggle (v2.5.1) ────────────────────────────────
+        # OFF by default - the always-on audio capture is wasteful for users
+        # who never use Shift+Alt+R. Flip ON to enable the 20-second rolling
+        # buffer (~1.3 MB resident plus the audio callback's lock+memcpy).
+        m.add_command(
+            label="Retro Buffer: ON" if _retro_enabled else "Retro Buffer: OFF",
+            command=_toggle_retro_buffer,
         )
 
         # ── Screen-context OCR toggle (v2.3) ──────────────────────────────────
@@ -1981,19 +2582,40 @@ class StatusWidget:
         except Exception:
             pass
 
-        frame = tk.Frame(card, bg="#1A1A1C", padx=10, pady=8,
-                         highlightbackground="#444", highlightthickness=1)
+        # Brand-token surface. INK_SOFT (elevated) with INK_MUTE 1-px border.
+        frame = tk.Frame(card, bg=theme.INK_SOFT,
+                         padx=theme.PAD_LG, pady=theme.PAD_MD,
+                         highlightbackground=theme.INK_MUTE,
+                         highlightthickness=theme.BORDER_THIN)
         frame.pack()
 
-        tk.Label(frame, text="cait-whisper", bg="#1A1A1C", fg="#CCCCCC",
-                 font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        # Title strip: brand mark + full "Cait. whisper" lockup. The mark
+        # is the icon-form of the brand; the lockup is the wordmark-form.
+        # Together they identify the product unambiguously.
+        title_row = tk.Frame(frame, bg=theme.INK_SOFT)
+        title_row.pack(anchor="w", pady=(0, theme.PAD_SM))
+        try:
+            mark_photo = theme.get_mark_photo(
+                18, border_color=theme.CORAL,
+                glyph_color=theme.CORAL, fill_color=theme.INK_SOFT,
+            )
+            mark_lbl = tk.Label(title_row, image=mark_photo, bg=theme.INK_SOFT,
+                                borderwidth=0, highlightthickness=0)
+            mark_lbl._photo = mark_photo   # keep alive
+            mark_lbl.pack(side="left", padx=(0, 6))
+        except Exception:
+            pass
+        theme.brand_lockup(title_row, bg=theme.INK_SOFT, fg=theme.PAPER,
+                           cait_size=12, period_size=14,
+                           whisper_size=12).pack(side="left")
+
         for label, value in lines:
-            row = tk.Frame(frame, bg="#1A1A1C")
+            row = tk.Frame(frame, bg=theme.INK_SOFT)
             row.pack(anchor="w", fill="x", pady=1)
-            tk.Label(row, text=label, bg="#1A1A1C", fg="#888",
-                     font=("Segoe UI", 8), width=14, anchor="w").pack(side="left")
-            tk.Label(row, text=value, bg="#1A1A1C", fg="#DDDDDD",
-                     font=("Segoe UI", 8)).pack(side="left", anchor="w")
+            tk.Label(row, text=label, bg=theme.INK_SOFT, fg=theme.INK_FAINT,
+                     font=theme.t_small(), width=14, anchor="w").pack(side="left")
+            tk.Label(row, text=value, bg=theme.INK_SOFT, fg=theme.PAPER_WARM,
+                     font=theme.t_small()).pack(side="left", anchor="w")
 
         # Position: directly ABOVE the widget with a generous buffer so the
         # cursor travel path from any content above down to the dot is never
@@ -2081,12 +2703,21 @@ class StatusWidget:
         _post_process = not _post_process
         _save_config_key("post_process", _post_process)
         log.info(f"LLM cleanup {'enabled' if _post_process else 'disabled'}")
-        # entryconfig is a belt-and-suspenders update; _rebuild_menu on next open is the real fix
-        self._menu.entryconfig(6, label="LLM Cleanup: ON" if _post_process else "LLM Cleanup: OFF")
-        # Start / stop Ollama in the background so the UI stays responsive
-        if _post_process:
+        # Rebuild the menu so the next right-click shows the new label.
+        # Removed the brittle entryconfig(6, ...) magic-number that broke
+        # whenever menu items were added/removed above this one.
+        self.root.after(0, self._rebuild_menu)
+        # Only manage the local Ollama subprocess if that's actually the
+        # configured provider. With openai_compatible we'd uselessly spawn
+        # a server that never gets called.
+        try:
+            from config_io import load_config
+            provider = load_config().get("llm_provider", "local_ollama")
+        except Exception:
+            provider = "local_ollama"
+        if _post_process and provider == "local_ollama":
             threading.Thread(target=_start_ollama_service, daemon=True, name="ollama-start").start()
-        else:
+        elif not _post_process:
             threading.Thread(target=_stop_ollama_service,  daemon=True, name="ollama-stop").start()
 
     def _drag_start(self, event):
@@ -2131,20 +2762,75 @@ class StatusWidget:
             self._start_watch_pulse()
             return
 
-        # Otherwise paint a static color + glyph according to mode.
+        # Paint the brand mark in the right colors per state.
+        # All variants use a dark INK coin backdrop so the ring and Φ render
+        # crisply against a solid surface (no anti-alias fringing against the
+        # transparent magenta key). The square canvas corners stay transparent
+        # so the visible result is a floating coin, not a square chip.
+        #
+        # Color hierarchy:
+        #   PURE     - quiet INK_FAINT (muted gray) ring + Φ on dark coin.
+        #              The resting state is intentionally low-attention;
+        #              it should READ as "here, but not asking for anything".
+        #              Coral is reserved for activity so any color shift
+        #              draws the eye.
+        #   ONE-SHOT - filled CORAL_SOFT coin, ink Φ (one command armed).
+        #   COMMAND  - filled CORAL coin, ink Φ (sticky listening).
+        #   READY    - brief CORAL_SOFT flash via _show_ready_toast on
+        #              model-load, then snaps back to PURE.
         if _one_shot_command:
-            # One-shot: brighter, hollow ring so the user sees "I'm armed for
-            # a single command" at a glance. Cleared after the next paste.
-            glyph = "◎"
-            color = "#9CD0F5"
+            self._redraw_mark(border=theme.CORAL_SOFT,
+                              fill=theme.CORAL_SOFT,
+                              glyph=theme.INK)
         elif _command_mode:
-            glyph = "◎"                  # hollow ring for sticky COMMAND
-            color = "#7FB0E0"             # bright blue so it's actually noticeable
+            self._redraw_mark(border=theme.CORAL,
+                              fill=theme.CORAL,
+                              glyph=theme.INK)
         else:
-            glyph = "◉"                  # filled dot for PURE
-            color = _IDLE_COLOR
-        self._dot.config(fg=color, bg=color, text=glyph)
-        self.root.config(bg=color)
+            # PURE idle: deeply muted INK_MUTE ring + Φ on a dark INK coin.
+            # INK_MUTE (#5a5448) is the darkest readable gray in the brand
+            # palette and the same color used for every other border in the
+            # app, so the resting coin reads as a quiet container outline,
+            # not as an active element. The mark only lights up (coral /
+            # mustard / coral_soft) when there's an actual activity to
+            # signal: startup ready, command mode, watch pulse.
+            self._redraw_mark(border=theme.INK_MUTE,
+                              fill=theme.INK,
+                              glyph=theme.INK_MUTE)
+
+    def _redraw_mark(self, *, border: str, glyph: str, fill: str = None):
+        """Paint the brand mark on the dot canvas via PIL.
+
+        v2.5.5: Canvas + window bg is ALWAYS INK (dark). We do NOT depend
+        on -transparentcolor for the canvas corners. That Windows-specific
+        key-color trick is unreliable across display drivers, color
+        profiles, and wide-gamut monitors - on some setups the magenta
+        leaks through as visible pink corners, which is exactly the
+        regression that prompted this rewrite.
+
+        Trade-off: the widget is now a small dark badge instead of a
+        floating ring. On Win11 the DWM corner rounding turns it into a
+        squircle. On dark wallpapers it's nearly invisible at rest. On
+        light wallpapers it's a small dark element, which reads as a real
+        UI affordance instead of a magic floating circle.
+
+        The PIL image still carries its own alpha channel for the area
+        outside the circle, so those pixels show the canvas bg (INK) and
+        blend with the window bg cleanly.
+
+        Args:
+            border: ring stroke color
+            glyph:  Φ text color
+            fill:   inner disc color, or None for ring-only (then the INK
+                    window bg shows inside the ring too)
+        """
+        self._dot.config(bg=theme.INK)
+        self.root.config(bg=theme.INK)
+        self._dot.delete("all")
+        theme.draw_widget_mark(
+            self._dot, _W_DOT,
+            border_color=border, glyph_color=glyph, fill_color=fill,
+        )
 
     # ── Amber pulse for correction watch ──────────────────────────────────
     def _start_watch_pulse(self):
@@ -2162,39 +2848,43 @@ class StatusWidget:
         self._pulse_job = None
 
     def _tick_watch_pulse(self):
-        """Toggle between two amber shades every ~600ms for a soft pulse."""
+        """Toggle between mustard shades every ~600ms for a soft pulse.
+        Brand jewelry: mustard = 'watching' signal. Filled circle + Φ flip
+        between brighter and dimmer to draw peripheral vision."""
         if self._state != "idle" or not _correction_active:
             self._stop_watch_pulse()
             return
-        # Alternate between darker and brighter amber
-        shade = "#D4A060" if (self._pulse_phase % 2 == 0) else "#FFC080"
-        self._dot.config(fg=shade, bg=shade, text="●")   # solid dot for visibility
-        self.root.config(bg=shade)
+        shade = theme.MUSTARD if (self._pulse_phase % 2 == 0) else theme.MUSTARD_SOFT
+        self._redraw_mark(border=shade, fill=shade, glyph=theme.INK)
         self._pulse_phase += 1
         self._pulse_job = self.root.after(600, self._tick_watch_pulse)
 
     def _show_ready_toast(self):
-        """Briefly turn the idle dot green to signal the ASR model is loaded and ready."""
+        """Briefly flash the mark in coral-soft when ASR is loaded and ready.
+        Uses CORAL_SOFT (brand jewelry) instead of a green/success color so
+        we stay on palette."""
         if self._state != "idle":
             return
-        self._dot.config(fg="#60D890", bg=_IDLE_COLOR)
-        self.root.attributes("-alpha", 0.85)
+        self._redraw_mark(border=theme.CORAL_SOFT, fill=theme.CORAL_SOFT, glyph=theme.INK)
         def _revert():
             try:
-                self._dot.config(fg=_IDLE_COLOR, bg=_IDLE_COLOR)
-                self.root.attributes("-alpha", _IDLE_ALPHA)
+                # Defer to the idle-color refresh which knows the right state.
+                # Transparency is via -transparentcolor, no alpha needed.
+                self._refresh_idle_color()
             except Exception:
                 pass
         self.root.after(2000, _revert)
 
     def _notify_dict_learned(self, original: str, replacement: str):
-        """Briefly flash a toast label on the widget when a dictionary entry is learned."""
+        """Briefly flash a toast label on the widget when a dictionary entry is learned.
+        Uses CORAL_SOFT on INK_SOFT (brand jewelry) instead of green/success
+        to stay on palette."""
         try:
             toast = tk.Label(
                 self._inner,
-                text=f"📖 '{original}' → '{replacement}'",
-                bg="#1C2A1C", fg="#60D890",
-                font=("Segoe UI", 8), padx=6, pady=2,
+                text=f"'{original}' → '{replacement}'",
+                bg=theme.INK_SOFT, fg=theme.CORAL_SOFT,
+                font=theme.t_small(), padx=theme.PAD_MD, pady=theme.PAD_XS,
             )
             toast.place(relx=0.5, rely=0.5, anchor="center")
             self.root.after(2800, toast.destroy)
@@ -2204,18 +2894,36 @@ class StatusWidget:
     def _notify_dict_pending(self, original: str, replacement: str, count: int, threshold: int):
         """Flash a toast when a correction candidate is seen but not yet promoted.
         Shows the user exactly how many more corrections are needed, so the
-        pending queue isn't invisible."""
+        pending queue isn't invisible.
+
+        MUSTARD = brand 'watching' jewelry, matches the watch-pulse on the
+        widget mark for visual continuity."""
         try:
             remaining = threshold - count
             if remaining > 0:
-                text = f"📝 '{original}' → '{replacement}' ({count}/{threshold} · {remaining} more)"
+                text = f"'{original}' → '{replacement}' ({count}/{threshold} · {remaining} more)"
             else:
-                text = f"📝 '{original}' → '{replacement}' ({count}/{threshold})"
+                text = f"'{original}' → '{replacement}' ({count}/{threshold})"
             toast = tk.Label(
                 self._inner,
                 text=text,
-                bg="#2A261C", fg="#E0C080",
-                font=("Segoe UI", 8), padx=6, pady=2,
+                bg=theme.INK_SOFT, fg=theme.MUSTARD,
+                font=theme.t_small(), padx=theme.PAD_MD, pady=theme.PAD_XS,
+            )
+            toast.place(relx=0.5, rely=0.5, anchor="center")
+            self.root.after(3500, toast.destroy)
+        except Exception:
+            pass
+
+    def _notify_retro_disabled(self):
+        """Toast shown when Shift+Alt+R is pressed but the retro buffer is off."""
+        try:
+            toast = tk.Label(
+                self._inner,
+                text="Retro buffer is OFF\nEnable via right-click menu",
+                bg=theme.INK_SOFT, fg=theme.MUSTARD,
+                font=theme.t_small(), padx=theme.PAD_MD, pady=theme.PAD_XS,
+                justify="center",
             )
             toast.place(relx=0.5, rely=0.5, anchor="center")
             self.root.after(3500, toast.destroy)
@@ -2225,14 +2933,17 @@ class StatusWidget:
     def _notify_bg_transcription(self, bg_text: str):
         """Toast that the background engine produced a better transcription.
         Stays visible a bit longer (4 seconds) because the user needs to
-        decide whether to press Alt+Shift+Z to swap the pasted text."""
+        decide whether to press Alt+Shift+Z to swap the pasted text.
+
+        INFO blue is the one cool, non-brand accent reserved for two-pass
+        availability cues, distinct from any state the widget mark uses."""
         try:
             preview = (bg_text[:40] + "…") if len(bg_text) > 40 else bg_text
             toast = tk.Label(
                 self._inner,
-                text=f"✨ Better version available · Alt+Shift+Z\n{preview}",
-                bg="#1C1F2A", fg="#90B8E8",
-                font=("Segoe UI", 8), padx=6, pady=2,
+                text=f"Better version available · Alt+Shift+Z\n{preview}",
+                bg=theme.INK_SOFT, fg=theme.INFO,
+                font=theme.t_small(), padx=theme.PAD_MD, pady=theme.PAD_XS,
                 justify="center",
             )
             toast.place(relx=0.5, rely=0.5, anchor="center")
@@ -2294,6 +3005,14 @@ _RETRO_TRANSCRIBE_SECS = 15
 _RETRO_MAX_CHUNKS     = int(_RETRO_BUFFER_SECS * SAMPLE_RATE / 1024)
 _retro_frames: collections.deque = collections.deque(maxlen=_RETRO_MAX_CHUNKS)
 _retro_lock   = threading.Lock()
+
+# ── Last-recording cache (v2.5.0) ─────────────────────────────────────────
+# After every recording we stash the raw frames so the user can retry with
+# a different ASR engine when the first pass produced garbage (looped, low
+# accuracy, etc). Just the most recent recording - one frames list at a time.
+# Memory cost: ~32 KB/sec. A 60-second recording uses ~1.9 MB. Negligible.
+_last_frames: list = []
+_last_frames_lock = threading.Lock()
 
 _ctrl_down        = False
 _win_down         = False
@@ -2371,6 +3090,156 @@ def _quit(*_):
 
 # ─── Audio ────────────────────────────────────────────────────────────────────
 
+# ─── Input device helpers ────────────────────────────────────────────────
+# Centralized so the device picker menu and stream-restart logic share
+# the same resolution rules (case-insensitive substring match on device name).
+
+def _list_input_devices() -> list[dict]:
+    """Return a deduplicated list of input-capable devices on this system.
+    Keys in each dict: name, index, hostapi, channels, samplerate, is_default.
+    Deduplicates by name preferring WASAPI > DirectSound > MME for lowest
+    latency on Windows."""
+    try:
+        all_devices = sd.query_devices()
+        hostapis = sd.query_hostapis()
+    except Exception as e:
+        log.warning(f"[InputDevice] enumerate failed: {e}")
+        return []
+
+    # Hostapi preference score (lower = better latency on Windows).
+    # WDM-KS is intentionally absent: PortAudio's WDM-KS support is fragile
+    # (many WDM-KS-only devices return paInvalidDevice when opened), and
+    # Microsoft documents WDM-KS as a debugging API not meant for app use.
+    # Devices that ONLY expose WDM-KS get hidden from the menu - users can
+    # still edit config.json manually if they need that path.
+    hostapi_rank = {"Windows WASAPI": 0, "Windows DirectSound": 1, "MME": 2}
+    HIDE_WDM_KS = True
+
+    try:
+        default_name = sd.query_devices(kind="input")["name"]
+    except Exception:
+        default_name = ""
+
+    # Group by truncated display name (Windows sometimes truncates at 32 chars
+    # across different hostapis, so match on the shorter name).
+    # Skip obvious noise: kernel driver paths, pseudo-devices, speaker loopback.
+    noise_markers = (
+        "@system32",            # raw kernel driver path names
+        "pc speaker",           # never useful as an input
+        "primary sound capture",  # MME generic; real device also listed
+        "microsoft sound mapper", # ditto
+        "stereo mix",           # loopback; user almost never wants this
+    )
+    groups: dict[str, list[dict]] = {}
+    for i, d in enumerate(all_devices):
+        if d["max_input_channels"] <= 0:
+            continue
+        name = d["name"].strip()
+        lower = name.lower()
+        if any(m in lower for m in noise_markers):
+            continue
+        ha_name = hostapis[d["hostapi"]]["name"]
+        # Drop WDM-KS-only entries unless we're keeping them
+        if HIDE_WDM_KS and ha_name == "Windows WDM-KS":
+            continue
+        entry = {
+            "index": i,
+            "name": name,
+            "hostapi": ha_name,
+            "channels": d["max_input_channels"],
+            "samplerate": int(d["default_samplerate"]),
+            "rank": hostapi_rank.get(ha_name, 99),
+        }
+        # Key on first 28 chars to collapse truncation variants
+        key = entry["name"][:28].lower()
+        groups.setdefault(key, []).append(entry)
+
+    # For each logical device, pick the best hostapi variant
+    result = []
+    for entries in groups.values():
+        entries.sort(key=lambda e: e["rank"])
+        best = entries[0]
+        best["is_default"] = (best["name"][:28].lower() == default_name[:28].lower())
+        result.append(best)
+
+    # Sort: default first, then alphabetical
+    result.sort(key=lambda e: (not e["is_default"], e["name"].lower()))
+    return result
+
+
+def _resolve_input_device(name_filter: str) -> int | None:
+    """Find a device index matching `name_filter` (case-insensitive substring).
+    Returns None if no match or empty filter. Callers should fall back to
+    Windows default (device=None) when this returns None."""
+    if not name_filter:
+        return None
+    needle = name_filter.strip().lower()
+    if not needle:
+        return None
+    for dev in _list_input_devices():
+        if needle in dev["name"].lower():
+            log.info(f"[InputDevice] resolved {name_filter!r} -> [{dev['index']}] "
+                     f"{dev['name']!r} ({dev['hostapi']})")
+            return dev["index"]
+    log.warning(f"[InputDevice] no match for {name_filter!r}; using system default")
+    return None
+
+
+def _switch_input_device(name: str):
+    """Stop the current stream, open a new one bound to the selected device,
+    and resume capture. Name is saved to config for next launch too.
+    Empty string means system default."""
+    global _stream, INPUT_DEVICE
+    INPUT_DEVICE = name or ""
+    _save_config_key("input_device", INPUT_DEVICE)
+
+    device_idx = _resolve_input_device(INPUT_DEVICE) if INPUT_DEVICE else None
+    log.info(f"[InputDevice] switching to {INPUT_DEVICE!r} (index={device_idx})")
+
+    # Close current stream cleanly
+    old = _stream
+    _stream = None
+    if old is not None:
+        try:
+            old.stop()
+            old.close()
+        except Exception as e:
+            log.debug(f"[InputDevice] closing old stream failed (continuing): {e}")
+
+    # Open new stream with the chosen device
+    try:
+        new_stream = sd.InputStream(
+            samplerate=SAMPLE_RATE,
+            channels=CHANNELS,
+            dtype="float32",
+            callback=_audio_callback,
+            blocksize=1024,
+            device=device_idx,   # None = system default
+        )
+        new_stream.start()
+        _stream = new_stream
+        log.info(f"[InputDevice] switched successfully")
+        # Rebuild the menu so the new active device shows a checkmark
+        if _widget:
+            _widget.root.after(0, _widget._rebuild_menu)
+    except Exception as e:
+        log.error(f"[InputDevice] could not open new stream: {e}")
+        # Best-effort fallback: try default device
+        try:
+            fallback = sd.InputStream(
+                samplerate=SAMPLE_RATE,
+                channels=CHANNELS,
+                dtype="float32",
+                callback=_audio_callback,
+                blocksize=1024,
+            )
+            fallback.start()
+            _stream = fallback
+            log.warning("[InputDevice] fell back to system default")
+        except Exception as e2:
+            log.error(f"[InputDevice] fallback also failed: {e2}")
+
+
 def _audio_callback(indata, frames, time_info, status):
     if status:
         log.warning(f"Audio stream status: {status}")
@@ -2379,8 +3248,12 @@ def _audio_callback(indata, frames, time_info, status):
             _audio_frames.append(indata.copy())
         # Retroactive capture: always buffer a rolling window, even when idle.
         # Tiny memory cost (~1.3 MB) in exchange for "grab the last 15 seconds".
-        with _retro_lock:
-            _retro_frames.append(indata.copy())
+        # Retroactive buffer fills ONLY when explicitly enabled by the user.
+        # Default OFF saves a memcpy + lock acquire on every audio callback
+        # (~64 KB/sec) and keeps the deque empty.
+        if _retro_enabled:
+            with _retro_lock:
+                _retro_frames.append(indata.copy())
 
 # ─── Transcribe + paste ───────────────────────────────────────────────────────
 
@@ -2390,10 +3263,68 @@ def _show_no_speech():
         _widget.set_state("no_speech")
 
 
+def _retranscribe_last(target_engine: str = "", target_model: str = ""):
+    """Re-run the ASR pipeline on the most recently captured audio.
+
+    Use cases:
+      - Moonshine looped on a long word; user clicks "Re-transcribe last → Whisper"
+      - User wants to compare engines on the same audio without re-speaking
+      - First pass produced low-quality transcription; try again
+
+    If target_engine and target_model are empty, retries with the currently
+    active engine. Otherwise switches first, then transcribes.
+
+    Refuses to fire while a recording or transcription is already in progress.
+    """
+    if _recording or _processing:
+        log.info("[ReTranscribe] ignored (recording/processing busy)")
+        return
+    with _last_frames_lock:
+        if not _last_frames:
+            log.info("[ReTranscribe] no last recording cached")
+            return
+        frames_copy = list(_last_frames)
+    secs = sum(len(f) for f in frames_copy) / SAMPLE_RATE
+    log.info(f"[ReTranscribe] re-running ASR on last recording ({secs:.1f}s, {len(frames_copy)} chunks)")
+
+    if _widget:
+        _ui_after(0, lambda: _widget.set_state("processing"))
+
+    def _do_retry():
+        # Optional engine switch first. _switch_model is a no-op if same.
+        if target_engine and target_model:
+            log.info(f"[ReTranscribe] switching engine to {target_engine}/{target_model}")
+            _switch_model(target_engine, target_model)
+            # Wait briefly for the model to load. _switch_model spawns a thread;
+            # poll _asr_lock until the new model is ready (max 30s).
+            t0 = time.perf_counter()
+            while time.perf_counter() - t0 < 30:
+                with _asr_lock:
+                    if (_current_engine == target_engine and
+                        _current_model == target_model and
+                        _asr_model is not None):
+                        break
+                time.sleep(0.1)
+            else:
+                log.warning("[ReTranscribe] model switch timed out; running with whatever loaded")
+        # Re-run the full pipeline (spoken punct, dictionary, paste, etc.)
+        _transcribe_and_paste(frames_copy)
+
+    threading.Thread(target=_do_retry, daemon=True, name="re-transcribe").start()
+
+
 def _trigger_retro_capture():
     """Retroactive capture (v2.2): transcribe the last ~15 seconds of audio
-    from the rolling buffer. Bound to Ctrl+Win+B. Refuses to fire while a
-    recording or transcription is already in progress."""
+    from the rolling buffer. Bound to Shift+Alt+R. Refuses to fire while a
+    recording or transcription is already in progress.
+
+    v2.5.1: requires _retro_enabled to be ON. If OFF, briefly shows a
+    helpful toast directing the user to the menu toggle."""
+    if not _retro_enabled:
+        log.info("[Retro] disabled - enable via right-click menu first")
+        if _widget:
+            _ui_after(0, _widget._notify_retro_disabled)
+        return
     if _recording or _processing:
         log.info("[Retro] ignored (recording/processing busy)")
         return
@@ -2434,6 +3365,15 @@ def _transcribe_and_paste(frames: list):
         rms      = float(np.sqrt(np.mean(audio_flat ** 2)))
         log.info(f"Audio: {duration:.2f}s  RMS={rms:.4f}")
 
+        # Stash the raw frames for "Re-transcribe last" (Shift+Alt+T or menu).
+        # Captured BEFORE any short/silent guards so even discarded recordings
+        # can be retried with a different engine if the user wants to.
+        # Skip captures that are clearly junk (< 0.5s) - retry won't help.
+        if duration >= 0.5:
+            global _last_frames
+            with _last_frames_lock:
+                _last_frames = list(frames)
+
         if duration < MIN_RECORD_SECS:
             log.info(f"Recording too short ({duration:.2f}s < {MIN_RECORD_SECS}s) — skipping ASR")
             _show_no_speech()
@@ -2443,6 +3383,23 @@ def _transcribe_and_paste(frames: list):
             log.info("Audio is silent (RMS below threshold) — skipping ASR")
             _show_no_speech()
             return
+
+        # ── Adaptive gain (v2.5.1) ───────────────────────────────────────────
+        # Quiet recordings (distant mic, soft-spoken user, cafe headset at
+        # low volume) make Whisper / Moonshine struggle. Normalize to a
+        # target RMS so the model sees signal at the level it was trained on.
+        # Caps gain at 8x to avoid pumping room noise; tanh-soft-clip
+        # prevents distortion at the top.
+        TARGET_RMS = 0.05    # roughly conversational speech level
+        MAX_GAIN   = 8.0
+        if 0.0005 <= rms < TARGET_RMS:
+            gain = min(TARGET_RMS / rms, MAX_GAIN)
+            audio_flat = audio_flat * gain
+            # Soft-clip with tanh: linear for small values, smoothly compresses
+            # peaks. Preserves dynamics better than hard clipping.
+            audio_flat = (np.tanh(audio_flat * 0.7) / 0.7).astype(np.float32)
+            new_rms = float(np.sqrt(np.mean(audio_flat ** 2)))
+            log.info(f"AGC: gain={gain:.2f}x → new RMS={new_rms:.4f}")
 
         t0 = time.perf_counter()
         raw_text = _run_asr(audio)
@@ -2471,6 +3428,101 @@ def _transcribe_and_paste(frames: list):
             )
             _show_no_speech()
             return
+        # ── Known-hallucination trailing-phrase strip (v2.5.1) ───────────────
+        # Whisper is trained on a lot of YouTube content and has learned to
+        # end transcriptions with stock phrases ("Thank you.", "Thanks for
+        # watching.", "Please subscribe.") regardless of what was said.
+        # When the audio ends and the model is uncertain, it tends to emit
+        # one of these. If the LAST 1-5 words of the transcription match a
+        # known stock phrase AND the rest is substantial, strip the tail.
+        _TRAILING_HALLUCINATIONS = (
+            # Each tuple is (lowercase phrase, must be at end). Match is case-
+            # insensitive, punctuation-insensitive. Order matters - longer
+            # phrases checked first so we don't strip just "thank" leaving "you".
+            "thanks for watching",
+            "please subscribe",
+            "subscribe to my channel",
+            "thank you for watching",
+            "see you next time",
+            "see you in the next video",
+            "thanks for watching, and i'll see you in the next video",
+            "thank you",
+            "thanks",
+        )
+        if len(raw_words) >= 5:
+            # Try each known phrase. Compare normalized trailing N words.
+            # Only strip if there's substantial real content before the phrase.
+            normalized_full = re.sub(r"[^\w\s]", "", raw_text).lower().strip()
+            for phrase in _TRAILING_HALLUCINATIONS:
+                phrase_words = phrase.split()
+                if len(raw_words) <= len(phrase_words) + 2:
+                    # Not enough non-phrase content; could be a real "thanks"
+                    continue
+                if normalized_full.endswith(phrase):
+                    # Strip those trailing words from raw_words
+                    new_words = raw_words[:-len(phrase_words)]
+                    # Also strip any trailing punctuation token left dangling
+                    while new_words and re.match(r"^[\W_]+$", new_words[-1]):
+                        new_words.pop()
+                    if new_words:
+                        log.warning(
+                            f"Hallucination: stripping trailing {phrase!r} "
+                            f"({len(phrase_words)} words) - kept {len(new_words)} real words"
+                        )
+                        raw_words = new_words
+                        raw_text = " ".join(raw_words)
+                    break
+
+        # ── Intra-word loop check ────────────────────────────────────────────
+        # Catches hallucinations baked INTO a single token, e.g.
+        # "CaitKatKatKat..." (no spaces) which the word-level n-gram guard
+        # below misses entirely because text.split() returns a single element.
+        # Strategy: regex-match a 2-8 char substring that repeats 5+ times
+        # consecutively. Keep whatever prefix preceded the loop, drop the rest.
+        _INTRA_LOOP_RE = re.compile(r"(.{2,8}?)\1{4,}")
+        cleaned_words = []
+        intra_stripped = 0
+        for w in raw_words:
+            if len(w) < 30:
+                # Short tokens can't be a meaningful loop; keep as-is
+                cleaned_words.append(w)
+                continue
+            m = _INTRA_LOOP_RE.search(w)
+            if not m:
+                cleaned_words.append(w)
+                continue
+            # Found a loop within this word. Compute what to keep.
+            loop_start = m.start()
+            loop_end   = m.end()
+            substr     = m.group(1)
+            reps       = (loop_end - loop_start) // len(substr)
+            prefix     = w[:loop_start]
+            suffix     = w[loop_end:]
+            log.warning(
+                f"Hallucination: intra-word loop in {w[:60]!r}... "
+                f"({substr!r} repeats {reps}x at pos {loop_start} of {len(w)}) — stripping"
+            )
+            intra_stripped += (loop_end - loop_start)
+            # Keep prefix. For the suffix: if it's short relative to the loop
+            # pattern, it's almost certainly an incomplete cycle leftover (e.g.
+            # 'tKa' repeating with one trailing 't') - drop it. If it's
+            # substantially longer than the pattern, treat it as real content
+            # that came after the loop and keep it with a space separator.
+            if suffix and len(suffix) > len(substr) * 2:
+                kept = (prefix + " " + suffix).strip()
+            else:
+                kept = prefix.strip()
+            if len(kept) >= 1:
+                cleaned_words.append(kept)
+        if intra_stripped > 0:
+            raw_words = cleaned_words
+            raw_text = " ".join(raw_words)
+            if not raw_text.strip():
+                log.warning("Hallucination: nothing left after intra-word strip — discarding")
+                _show_no_speech()
+                return
+            log.info(f"Intra-word strip recovered: {raw_text!r}")
+
         if len(raw_words) >= 6:
             # Consecutive-run check with stripping.
             # Catches partial loops that are interleaved with real content,
@@ -2582,21 +3634,27 @@ def _transcribe_and_paste(frames: list):
         final_text = punct_text
 
         # ── LLM cleanup (optional) ────────────────────────────────────────
+        # Routes through llm_provider, which dispatches to local Ollama or
+        # any OpenAI-compatible endpoint based on llm_provider config.
+        # Returns None on any failure - we keep the raw transcript in that case.
         if _post_process:
-            # Ollama is only started when the user explicitly toggles LLM Cleanup ON
-            # via the menu (_toggle_llm).  We do NOT auto-start it here; if it isn't
-            # running yet we skip cleanup and use the raw transcript.
             try:
-                import ollama
-                resp = ollama.chat(
-                    model=OLLAMA_MODEL,
-                    messages=[{"role": "user", "content": CLEANUP_PROMPT.format(transcript=raw_text)}],
-                    options={"temperature": 0.1, "num_predict": 512},
+                from llm_provider import llm_call
+                t_llm = time.perf_counter()
+                cleaned = llm_call(
+                    CLEANUP_USER_TEMPLATE.format(transcript=raw_text),
+                    system_prompt=CLEANUP_SYSTEM_PROMPT,
+                    temperature=0.1,
+                    max_tokens=512,
+                    timeout=30.0,
                 )
-                final_text = resp["message"]["content"].strip()
-                log.info(f"LLM ({time.perf_counter() - t_asr:.2f}s): {final_text!r}")
+                if cleaned:
+                    final_text = cleaned
+                    log.info(f"LLM ({time.perf_counter() - t_llm:.2f}s): {final_text!r}")
+                else:
+                    log.info("LLM cleanup returned nothing - keeping raw transcript")
             except Exception as e:
-                log.warning(f"LLM cleanup skipped (Ollama not ready — enable via menu): {e}")
+                log.warning(f"LLM cleanup skipped: {e}")
 
         # ── Personal dictionary substitution ─────────────────────────────
         final_text = _apply_dictionary(final_text)
@@ -2680,7 +3738,13 @@ def _transcribe_and_paste(frames: list):
         # ── Two-pass: kick off higher-accuracy background transcription ──
         # Only makes sense when the primary engine is Moonshine (the fast one).
         # For Whisper or Parakeet, there's nothing to improve on.
-        if _two_pass_enabled and _bg_asr_model is not None and _current_engine == "moonshine":
+        #
+        # NOTE: we no longer check `_bg_asr_model is not None` here. The v2.5.1
+        # idle-unload supervisor may have dropped the bg model, but _run_bg_asr
+        # has its own reload-on-demand path. Gating here would silently disable
+        # two-pass after the first idle period - same class of bug we just
+        # fixed in _start_recording.
+        if _two_pass_enabled and _current_engine == "moonshine":
             threading.Thread(
                 target=_run_bg_asr,
                 args=(audio_flat, final_text),
@@ -2731,9 +3795,21 @@ def _cancel_recording():
 def _start_recording():
     global _recording, _correction_active
     if _asr_model is None:
-        log.info("Ignoring start — model still loading")
-        if _widget: _widget.set_state("busy")
-        return
+        # Two distinct cases that both look like "_asr_model is None":
+        #   1. App just started, model is still loading for the first time.
+        #      User has to wait - refuse the start.
+        #   2. Model was loaded successfully earlier, then the idle-unload
+        #      supervisor dropped the reference to save RAM. We can start
+        #      recording immediately; `_run_asr` will reload before transcribing.
+        # `_last_asr_use_time > 0` is the discriminator - it only gets set
+        # after at least one successful transcription.
+        if _last_asr_use_time > 0:
+            log.info("[IdleUnload] model unloaded earlier - will reload during transcription")
+            # Fall through: allow recording to proceed
+        else:
+            log.info("Ignoring start — model still loading")
+            if _widget: _widget.set_state("busy")
+            return
     if _processing:
         log.info("Ignoring start — transcription in progress")
         if _widget: _widget.set_state("busy")
@@ -2796,7 +3872,7 @@ _TRACKED_KEYS = frozenset({
     "ctrl", "left ctrl", "right ctrl",
     "alt", "left alt", "right alt",
     "shift", "left shift", "right shift",
-    "enter", "z", "r", "c", "space",
+    "enter", "z", "r", "c", "t", "space",
     "windows", "left windows", "right windows",
 })
 
@@ -2834,6 +3910,16 @@ def _on_key_event(event):
         if down and _alt_down and _shift_down:
             threading.Thread(target=_trigger_retro_capture,
                              daemon=True, name="retro").start()
+            return
+
+    # ── Shift+Alt+T — re-transcribe last ("Try again") ───────────────────────
+    # Re-runs ASR on the most recently captured audio with the current engine.
+    # Useful when a transcription looped (CaitKatKat...) or came out garbled.
+    # For a different model, use right-click -> "Re-transcribe last" cascade.
+    if key == "t":
+        if down and _alt_down and _shift_down:
+            threading.Thread(target=lambda: _retranscribe_last("", ""),
+                             daemon=True, name="retranscribe-hotkey").start()
             return
 
     # ── Shift+Alt+C — one-shot COMMAND mode ──────────────────────────────────
@@ -2929,6 +4015,17 @@ def _trigger_one_shot_command():
 def main():
     global _widget, _tray, _stream, _asr_model
 
+    # Per-Monitor V2 DPI awareness — call BEFORE any Tk root is created.
+    # Without this, a Toplevel (like the hover card) rendered on a secondary
+    # monitor with different DPI scaling comes out blurry or wrong-sized.
+    # Swallow the error on older Windows where shcore is unavailable; the
+    # app still works, just without per-monitor DPI correctness.
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+        log.info("startup: per-monitor V2 DPI awareness enabled")
+    except Exception as e:
+        log.debug(f"startup: DPI awareness unavailable ({e}); continuing")
+
     log.info("startup: loading history and dictionary")
     _load_history()
     _load_dictionary()
@@ -2936,6 +4033,10 @@ def main():
     # ── Widget first — appears immediately ────────────────────────────────────
     log.info("startup: creating widget")
     _widget = StatusWidget()
+    # Now that a Tk root exists, ask theme to upgrade font choices if
+    # brand-preferred families (Inter, Inter Tight, etc.) are installed.
+    # Idempotent and silent if not.
+    theme.resolve_fonts()
     _widget.set_state("loading")   # indigo pulse while model loads
     log.info("startup: widget visible")
 
@@ -3031,19 +4132,49 @@ def main():
         _fatal(f"Could not register keyboard hook: {e}\n\nMake sure you are running as Administrator.", e)
 
     # ── Mic stream ────────────────────────────────────────────────────────────
+    # Try the configured device first; if it fails (disconnected, exclusive
+    # locked by another app, sample-rate mismatch), automatically fall back
+    # to system default rather than crashing the whole app at startup.
     log.info("startup: opening mic stream")
-    try:
-        _stream = sd.InputStream(
+
+    def _try_open_stream(device_idx, label):
+        return sd.InputStream(
             samplerate=SAMPLE_RATE,
             channels=CHANNELS,
             dtype="float32",
             callback=_audio_callback,
             blocksize=1024,
+            device=device_idx,
         )
-        _stream.start()
-        log.info("startup: mic stream OK")
-    except Exception as e:
-        _fatal(f"Could not open microphone: {e}\n\nCheck that a microphone is connected and not in use.", e)
+
+    _stream_opened = False
+    if INPUT_DEVICE:
+        _device_idx = _resolve_input_device(INPUT_DEVICE)
+        log.info(f"startup: trying configured input device {INPUT_DEVICE!r} -> index={_device_idx}")
+        try:
+            _stream = _try_open_stream(_device_idx, INPUT_DEVICE)
+            _stream.start()
+            _stream_opened = True
+            log.info("startup: mic stream OK (configured device)")
+        except Exception as e:
+            log.warning(
+                f"startup: configured device {INPUT_DEVICE!r} failed to open ({e}); "
+                f"falling back to system default. Device may be disconnected, "
+                f"exclusive-locked by another app, or have incompatible sample rate."
+            )
+
+    if not _stream_opened:
+        try:
+            log.info("startup: opening system default input device")
+            _stream = _try_open_stream(None, "system default")
+            _stream.start()
+            log.info("startup: mic stream OK (system default)")
+        except Exception as e:
+            _fatal(
+                f"Could not open microphone: {e}\n\n"
+                f"Check that a microphone is connected and not in use by another app.",
+                e,
+            )
 
     # ── Load ASR model in background — widget is already visible ─────────────
     def _load_model_bg():
@@ -3076,6 +4207,12 @@ def main():
     # Silently no-ops when two-pass is disabled or the primary engine already
     # is a higher-accuracy model.
     threading.Thread(target=_load_bg_asr, daemon=True, name="bg-model-load").start()
+
+    # ── Idle-unload supervisor (v2.5.1 lean mode) ─────────────────────────────
+    # Watches the last-use timestamps and drops ASR model references after
+    # configurable idle thresholds. Reload is automatic on next use.
+    threading.Thread(target=_idle_unload_supervisor,
+                     daemon=True, name="idle-unload").start()
 
     log.info("startup: entering main loop (model loading in background)")
 

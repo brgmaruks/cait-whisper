@@ -2,6 +2,57 @@
 
 All notable changes to cait-whisper will be documented in this file.
 
+## [2.5.5] - 2026-05-28
+
+Headline: ASR pipeline is unchanged. Everything else got a full visual and UX overhaul so the app looks and feels like a 1.0 product instead of a tool-by-engineers.
+
+### Added
+- **`theme.py`** - single source of truth for every color, font, spacing token, glyph, and rendered asset in the app. Brand palette (coral / ink / paper / mustard / olive) defined once, imported by `client.py` and `history_window.py`.
+- **PIL-rendered brand mark** (Φ-in-circle). The widget coin, history-window title-bar mark, settings-tab mark, and tray icon all use `theme.render_mark_image()` at 4x supersample / LANCZOS downsample. Crisp anti-aliasing at every size; no more Tk Canvas oval pixelation.
+- **Custom glyph system**. Hand-drawn vector icons in PIL: transcripts, dictionary, pending, settings, search, close, copy, arrow_right, plus, sparkle, trash, and a standalone phi. Tab labels in the history window and inline action icons all use these instead of inconsistent Unicode characters / OS-rendered emoji.
+- **Multi-resolution `cait.ico`**. Generated on first launch by `theme.ensure_brand_ico()` into `assets/cait.ico`. Embeds 16/32/48/64/128/256 px renders so Windows picks the right one for taskbar, Alt-Tab, file explorer, and title bar.
+- **Waveform style picker** (`Waveform ▸` cascade in the right-click menu). Six visual styles: filled wave, classic bars, mirrored bars (default), dots, oscilloscope, blocks. Selection persists to `config.json` as `waveform_style`. Each style is a `_draw_*` method on `StatusWidget`.
+- **Brand-styled right-click menu**. Every `tk.Menu` in the widget is now `_styled_menu()` with INK background, PAPER text, CORAL hover. Consistent with the rest of the app instead of Windows-default light gray.
+- **"Cait. whisper" brand lockup**. `theme.brand_lockup()` helper composes bold "Cait" + coral italic period + italic "whisper" as a packed Frame. Applied to: hover card title strip, history window title bar, OS window title bar.
+- **Settings tab in the history window** has a coral glyph next to each tab label (transcripts / dictionary / pending / settings) and the brand lockup at the top.
+- **`docs/for-testers.md`** - one-page brief written for a non-technical tester.
+- **`docs/design-system.md`** and **`docs/providers.md`** - extracted design tokens and LLM provider setup into dedicated docs.
+
+### Changed
+- **Resting coin is now quiet** (INK_MUTE warm gray on dark INK coin). The brand mark only "lights up" coral on activity: startup ready toast, COMMAND mode, one-shot armed, correction watch.
+- **Recording strip dimensions**: 196×36 → 240×40. More horizontal room, more vertical breathing room, cleaner button alignment.
+- **Recording strip buttons** are now PIL-rendered glyphs (close / phi) instead of Tk text labels. Same widget type, same rendering pipeline -> automatic optical alignment. Hover state swaps the PhotoImage instead of changing fg color.
+- **Standardized border**: every container outline is now `theme.INK_MUTE` (warm gray) at `theme.BORDER_MED` (2px) for floating chrome, `theme.BORDER_THIN` (1px) for inline dividers. Recording strip border was coral per-state; now consistently gray since the waveform color already signals state.
+- **Widget no longer relies on `-transparentcolor`**. That Windows API was unreliable across display drivers / wide-gamut monitors / color profiles - magenta pixels leaked through as visible pink corners on affected machines. The widget is now a small dark INK badge with DWM-rounded corners (squircle on Win11). The PIL image's own alpha channel handles the inside-coin transparency.
+- **Widget hidden from taskbar / Alt-Tab** via `WS_EX_TOOLWINDOW`. Floating utility surface, not an app entry alongside Word and Chrome.
+- **History window** is wider (540 → 640 px) to accommodate the four tabs with their new coral glyphs.
+- **Window title bar** says "Cait. whisper" instead of "Cait" so the taskbar / Alt-Tab match the wordmark.
+
+### Fixed
+- **Cross-monitor cursor-follow regression**. `_user_placed=True` was sticky once set, silently disabling follow forever for anyone who had a saved widget position. New rule: same monitor as before -> respect placement. Different physical monitor -> follow, clear `_user_placed`.
+- **Idle-unload + start-recording race**. The supervisor would drop `_asr_model = None` after 60s idle; the next `_start_recording` check treated this identically to "still loading" and refused to start. Replaced `is None` checks with `_last_asr_use_time > 0` to distinguish loaded-then-unloaded from never-loaded.
+- **Two-pass silently disabled after idle** for the same reason in the trigger gate.
+- **`CaitKatKatKat...` intra-word hallucination**. Word-level loop guard missed single-token loops with no spaces. Added regex `(.{2,8}?)\1{4,}` to detect and strip intra-word repetition while keeping the legitimate prefix.
+- **Trailing "Thank you." hallucination**. Added trailing-phrase strip list with a min-words guard.
+- **`no_speech_prob` filter was too aggressive at 0.7**. Bumped to 0.85 and added a safety net to never return empty if Whisper produced segments.
+- **WDM-KS input devices** filtered out of the mic picker (caused `paInvalidDevice` errors).
+- **Mic startup fatal failure** if the configured device disappeared between sessions. Falls back to system default with a log warning instead of refusing to launch.
+- **Z.AI test connection "no response" generic error**. `test_connection()` now returns the actual exception type and message.
+
+### Repo organization
+- `cait.ico` moved to `assets/cait.ico` (auto-generated if missing).
+- `ECONOMY.md` and `rewards.json` moved to `docs/economy/`.
+- `preview/` (dev-only render output) added to `.gitignore`.
+- README hero rewritten as 3-step install for non-technical users.
+- `docs/for-testers.md` added for outside testers.
+
+### Backward compatibility
+- v2.4 `config.json` files load unchanged. New keys (`waveform_style`, `llm_profiles`, etc.) default to safe values if missing.
+- The `appearance.idle_size`/`active_alpha`/etc. keys from v2.4 are still respected.
+- The legacy `ollama_model` flat key still falls back when no `llm_profiles` is set.
+
+---
+
 ## [2.4.0] - Unreleased (pending UAT sign-off)
 
 ### Changed (breaking)
@@ -27,6 +78,50 @@ All notable changes to cait-whisper will be documented in this file.
 - Dev-mode log traces are `log.debug()` calls, so they incur zero overhead when dev_logs is OFF.
 - The hover card is a Tkinter Toplevel that's destroyed on leave. No persistent memory footprint.
 - The amber pulse uses `root.after()` scheduling, cancellable when state changes. No thread spawned.
+
+---
+
+## [2.5.0] - Unreleased (pending UAT sign-off)
+
+Headline: cait-whisper is no longer locked to local Ollama. Point it at any OpenAI-compatible endpoint (Z.AI, Groq, Together, OpenAI, DeepSeek, self-hosted vLLM, Tailscale Ollama) and LLM-dependent features run as fast as the network allows. Plus a Settings tab so users never have to hand-edit `config.json`.
+
+### Added
+- **Re-transcribe last** (`Shift+Alt+T` and right-click menu cascade). The most recent recording's raw audio is cached after every transcription. When ASR loops or produces garbage, hit Shift+Alt+T to retry with the current engine, or right-click → "Re-transcribe last ▸" to pick a different model (Moonshine → Whisper, etc.) without re-speaking. Memory cost ~32 KB per second of recorded audio.
+- **Microphone picker** in the right-click menu (`Microphone ▸`). Lists available input devices, lets the user hot-swap without restarting or changing Windows defaults. Filters out unreliable WDM-KS-only entries to prevent paInvalidDevice errors. Saves to `input_device` config key. Falls back to system default if the saved device disappears.
+- **Intra-word hallucination strip**. Single-token loops like "CaitKatKatKat..." (no spaces) now get stripped to the legitimate prefix instead of pasting hundreds of garbage characters. Complements the v2.4 word-level loop guard.
+- **Online LLM providers**. New `llm_provider` config key with two values: `local_ollama` (default, identical to v2.4 behavior) and `openai_compatible` (any provider that speaks the OpenAI chat API). Configurable via the new Settings tab or by editing `config.json`. Covers Z.AI, Groq, Together, OpenAI, DeepSeek, self-hosted vLLM, and Tailscale-reachable Ollama-over-HTTPS.
+- **Settings tab with saved provider profiles**. New 4th tab in the History & Dictionary window. Save as many named profiles as you want (Z.AI fast, Groq Llama 70B, local Ollama, your Tailscale-reachable server, etc.). Each profile keeps its own Base URL, model, and API key. One profile is ACTIVE at a time; switching is a single click and does NOT require re-entering keys. "Add from preset" dropdown pre-fills endpoints for Local Ollama, Z.AI, Groq, OpenAI, Together, DeepSeek, and Custom. Per-profile "Test connection" button pings with a short prompt and reports OK / failure inline. Read-only display of the current ASR engine and feature toggles for at-a-glance status. Full backward compatibility: v2.4 and v2.5.0-beta configs with the old flat `llm_provider`/`llm_base_url` keys are read on first load and migrated into a profile the first time you save.
+- **`llm_provider.py`** - new module providing a single `llm_call()` dispatch helper. Replaces direct `ollama.chat()` calls at all 3 LLM call sites in the codebase.
+- **`config_io.py`** - new shared helpers for atomic config read/write and secret-key redaction. Used by both the main client and `history_window.py`.
+- **Per-Monitor V2 DPI awareness**. Fixes hover card and widget rendering on multi-monitor setups with mixed DPI scaling.
+- **API key log redaction**. Secret-like config keys (`api_key`, `token`, etc.) are replaced with `*** (set, N chars)` in log output. The actual key never appears in `cait-whisper.log`.
+
+### Fixed
+- **Multi-monitor hover card mispositioning** when running on a secondary monitor with different DPI from the primary. Per-Monitor V2 awareness combined with the v2.4 virtual-screen positioning logic now renders the card correctly anywhere.
+- **Saved widget position bounds check**. Positions saved under v2.4 (DPI-unaware coordinates) could land outside the virtual screen after upgrade. v2.5 validates against virtual-screen bounds and falls back to auto-anchor if the saved coords are off-screen.
+- **`_toggle_llm` magic-number `entryconfig(6, ...)`**. Removed; menu now rebuilds via `_rebuild_menu` so adding/removing menu items above LLM Cleanup doesn't poison a different entry.
+- **Local Ollama no longer auto-starts** when LLM Cleanup is enabled if the configured provider is `openai_compatible`. Previously cait-whisper spun up an idle Ollama subprocess that never received a call.
+
+### Changed
+- `requirements.txt` adds `openai>=1.57`. Local-only users can comment out the line to skip the install.
+- `config.example.json` adds `llm_provider`, `llm_base_url`, `llm_api_key`, `llm_model` keys (all optional, defaulted, backward-compatible with v2.4 configs).
+- `_save_config_keys` now redacts secret-like values in log output.
+
+### Backward compatibility
+- v2.4 `config.json` files continue working without modification. Missing `llm_provider` key defaults to `local_ollama` (no behavior change).
+- `ollama_model` config key is preserved as a fallback when `llm_model` is unset.
+- All v2.4 features (auto-dict, one-shot commands, hover card, retroactive capture, screen context, two-pass) work unchanged.
+
+### Deferred to v2.5.1 (next release)
+- **Timezone tab** in the productivity panel
+- **Tier 1 voice commands** (text editing: select all, copy, paste, bold, save, etc.)
+- **Tier 3 meta commands** (cancel, open history, quit, etc.)
+- **Commands reference tab** for discoverability
+
+### Deferred to v2.6+
+- **Remote ASR endpoint** (a `_RemoteWhisperEngine` class for the hot path)
+- **Trigger word mode** ("Nova, [command]" without a hotkey)
+- **Multi-lingual dictation**
 
 ---
 

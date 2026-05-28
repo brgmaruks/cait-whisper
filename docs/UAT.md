@@ -202,6 +202,78 @@ This is the one we specifically want to debug with dev logs.
 
 ---
 
+## v2.5.0 additions
+
+### Group P: Per-Monitor DPI awareness
+
+1. Drag the widget to your secondary monitor (different DPI from primary).
+2. Hover over the dot.
+3. **Expected**: Hover card renders at the correct font size for that monitor (no blurry scaling, no microscopic text).
+4. Move the cursor away. Card disappears.
+5. Drag the widget back to the primary monitor. Hover again. Card renders correctly there too.
+
+### Group Q: Settings tab - read-only sanity
+
+1. Right-click the widget -> "History & Dictionary".
+2. Click the new **Settings** tab (4th tab).
+3. **Expected**: Tab loads with current config visible:
+   - LLM Provider: Local Ollama selected (or whatever you set)
+   - Base URL: empty (default)
+   - Model: `llama3.2:3b` (or whatever's in `ollama_model`)
+   - API Key: empty, masked with `*`
+   - ASR Engine section shows current engine + model + Two-Pass status
+   - Features section lists every feature with ON/OFF
+4. Click **Show** next to API Key field. Field becomes plaintext. Click **Hide** again.
+
+### Group R: Settings tab - switch to remote provider
+
+Requires an OpenAI-compatible API key (Z.AI, Groq, or OpenAI account).
+
+1. In the Settings tab, click "OpenAI-compatible" radio.
+2. Fill in:
+   - Base URL: e.g. `https://api.groq.com/openai/v1` or `https://api.z.ai/v1`
+   - Model: e.g. `llama-3.3-70b-versatile` or `glm-4-flash`
+   - API Key: your key
+3. Click **Test connection**.
+4. **Expected**: Status shows "Testing..." for a moment, then "OK. Response: 'OK.'" (or similar) in green.
+5. Click **Save**. Status shows "Saved." in green.
+6. Open `cait-whisper.log`. Search for `llm_api_key`.
+7. **Expected**: You see `llm_api_key = '*** (set, N chars)'` - NOT the actual key.
+
+### Group S: Remote provider in action
+
+After completing Group R successfully:
+
+1. In the main app, dictate a paragraph in PURE mode.
+2. Right-click widget -> "LLM Cleanup: ON". (If the menu shows OFF.)
+3. Dictate another paragraph that contains filler words.
+4. **Expected**: Cleaned version pastes much faster than local Ollama (typically <500ms for Groq).
+5. Log shows the LLM call routing through `[LLM:openai_compatible]`.
+
+### Group T: Refusal of empty Base URL
+
+1. In Settings tab, switch to OpenAI-compatible.
+2. Clear the Base URL field.
+3. Click **Save**.
+4. **Expected**: Status shows "OpenAI-compatible needs a Base URL. Refusing to save with empty URL." in red. Save does not proceed.
+
+### Group U: Backward compatibility - existing config still works
+
+1. Switch back to "Local Ollama" in Settings tab. Save.
+2. Quit and relaunch the app.
+3. **Expected**: All v2.4 features work identically. No errors at startup.
+4. Log line at startup: `per-monitor V2 DPI awareness enabled` (or similar).
+
+### Group V: Local Ollama no longer auto-starts when provider is remote
+
+1. Set provider to OpenAI-compatible. Save.
+2. Make sure Ollama is NOT running on your machine (kill any `ollama serve` process).
+3. Toggle LLM Cleanup: ON in the right-click menu.
+4. **Expected**: cait-whisper does NOT spawn an Ollama subprocess (check Task Manager).
+5. Dictate something. LLM cleanup runs via the remote provider.
+
+---
+
 ## Reporting results
 
 When done, post a summary:

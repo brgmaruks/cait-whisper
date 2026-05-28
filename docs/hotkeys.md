@@ -15,6 +15,7 @@ All hotkeys are global. They work regardless of which application has focus.
 |--------|--------|
 | `Shift + Alt + Z` | Re-paste the last transcription. Useful when the first paste landed in the wrong field. |
 | `Shift + Alt + R` | Retroactive capture. Transcribes the last ~15 seconds of audio from the always-on rolling buffer. |
+| `Shift + Alt + T` | Re-transcribe last ("Try again"). Re-runs ASR on the most recent recording with the current engine - useful when the first pass looped or came out garbled. For a different engine, use right-click -> "Re-transcribe last". |
 
 ## Mode
 

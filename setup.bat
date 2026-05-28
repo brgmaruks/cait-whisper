@@ -228,6 +228,7 @@ echo   Hotkeys:
 echo     Ctrl + Win  (hold)       hold-to-talk
 echo     Ctrl + Win + Space       hands-free toggle
 echo     Shift + Alt + R          retroactive capture (last ~15 s)
+echo     Shift + Alt + T          re-transcribe last recording (try again)
 echo     Shift + Alt + C          one-shot COMMAND mode
 echo     Shift + Alt + Z          re-paste last transcription
 echo.

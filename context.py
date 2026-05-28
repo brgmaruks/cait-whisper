@@ -26,13 +26,29 @@ import logging
 
 log = logging.getLogger("cait-whisper")
 
-# ── Optional: pywinauto for UI Automation ─────────────────────────────────
-try:
-    from pywinauto import Desktop  # type: ignore
-    from pywinauto.application import Application  # type: ignore
-    _HAS_PYWINAUTO = True
-except Exception:
-    _HAS_PYWINAUTO = False
+# ── Optional: pywinauto for UI Automation (LAZY-LOADED) ──────────────────
+# pywinauto + its comtypes/pywin32 deps weigh ~30 MB resident. v2.5.1 defers
+# the import to the first call of get_field_context() so users who never
+# use COMMAND mode don't pay the memory cost. _HAS_PYWINAUTO=None means
+# "not yet probed"; True/False are the resolved states after first probe.
+_HAS_PYWINAUTO: bool | None = None
+Desktop = None  # populated on first successful probe
+
+
+def _ensure_pywinauto():
+    """Probe-and-cache pywinauto availability. Returns True if importable."""
+    global _HAS_PYWINAUTO, Desktop
+    if _HAS_PYWINAUTO is not None:
+        return _HAS_PYWINAUTO
+    try:
+        from pywinauto import Desktop as _Desktop  # type: ignore
+        from pywinauto.application import Application  # type: ignore  # noqa: F401
+        Desktop = _Desktop
+        _HAS_PYWINAUTO = True
+        log.info("[Context] pywinauto loaded (lazy)")
+    except Exception:
+        _HAS_PYWINAUTO = False
+    return _HAS_PYWINAUTO
 
 
 # ── Active window detection (ctypes, always available) ───────────────────
@@ -106,7 +122,7 @@ def _get_field_context_inner(max_preceding: int) -> FieldContext:
     the public `get_field_context()` so a slow UI (Chrome with many tabs,
     complex Electron UIs) can never block the transcription pipeline."""
     empty = FieldContext(selection="", preceding="", has_selection=False)
-    if not _HAS_PYWINAUTO:
+    if not _ensure_pywinauto():
         return empty
 
     try:
@@ -173,7 +189,7 @@ def get_field_context(max_preceding: int = 200, timeout: float = 0.25) -> FieldC
     Returns an empty context on any failure, including timeout. Never raises.
     """
     empty = FieldContext(selection="", preceding="", has_selection=False)
-    if not _HAS_PYWINAUTO:
+    if not _ensure_pywinauto():
         return empty
 
     result_box: list = [empty]

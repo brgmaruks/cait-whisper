@@ -172,6 +172,21 @@ _retro_enabled: bool = cfg.get("retro_enabled", False)
 # IDENTITY (HMONITOR handle) instead of coordinates, so transient post-wake
 # work-area wobbles on a single monitor no longer move the dot.
 _WIDGET_FOLLOW_CURSOR: bool = cfg.get("widget_follow_cursor", True)
+
+# Widget placement: WHERE on the active monitor the dot rests. Composes with
+# cursor-follow (it anchors at this position on whichever monitor the cursor
+# is on). Manual drag overrides until the next placement pick or monitor hop.
+#   bottom_center - modern dictation-app convention (Wispr Flow / superwhisper
+#                   style); strip blooms symmetrically from center (default)
+#   bottom_right  - traditional, tucked near the system tray
+#   bottom_left   - mirror of bottom_right
+WIDGET_PLACEMENTS = (
+    ("bottom_center", "Bottom center"),
+    ("bottom_right",  "Bottom right"),
+    ("bottom_left",   "Bottom left"),
+)
+WIDGET_PLACEMENT: str = cfg.get("widget_placement", "bottom_center")
+
 _use_screen_context: bool = cfg.get("use_screen_context", False)  # v2.3 OCR augmentation
 _dev_logs: bool = cfg.get("dev_logs", False)  # v2.4 verbose debug logging
 
@@ -1343,6 +1358,34 @@ def _set_waveform_style(style: str):
         _widget.root.after(0, _widget._rebuild_menu)
 
 
+def _set_widget_placement(placement: str):
+    """Switch where the dot rests on its monitor and persist to config.
+    Clears any manual drag placement and the saved position, then re-anchors
+    immediately so the change is visible without a restart."""
+    global WIDGET_PLACEMENT
+    WIDGET_PLACEMENT = placement
+    _save_config_key("widget_placement", placement)
+    log.info(f"Widget placement set to: {placement}")
+    if _widget:
+        def _apply():
+            # Drop the manual-placement override + saved position so the
+            # preset takes over, then re-anchor to the new spot.
+            _widget._user_placed = False
+            _widget._anchored_hmon = None   # force re-anchor on next heartbeat too
+            try:
+                with open(CONFIG_PATH) as f:
+                    data = json.load(f)
+                if "widget_position" in data:
+                    data.pop("widget_position", None)
+                    with open(CONFIG_PATH, "w") as f:
+                        json.dump(data, f, indent=4)
+            except Exception:
+                pass
+            _widget._reanchor_current_monitor()
+            _widget._rebuild_menu()
+        _widget.root.after(0, _apply)
+
+
 # ─── Live model switching ─────────────────────────────────────────────────────
 
 def _switch_model(engine: str, model: str):
@@ -1506,6 +1549,35 @@ def _get_cursor_monitor_info():
     return None
 
 
+def _get_monitor_bounds_for_point(px: int, py: int, *, work_area: bool = True):
+    """Return the bounds (x, y, w, h) of the monitor that contains the
+    screen point (px, py). Falls back to None if the Win32 call fails.
+
+    This is the point-based sibling of _get_cursor_monitor_info. Used to
+    confine a popup (the hover card) to the SAME physical monitor as the
+    widget so it can never spill across the bezel onto a neighbouring
+    monitor when the widget sits near a screen edge.
+
+    Args:
+        px, py: absolute screen coordinates of a point on the target monitor
+        work_area: True returns rcWork (excludes the taskbar); False returns
+            rcMonitor (the full physical monitor rectangle).
+    """
+    try:
+        pt = _POINT()
+        pt.x = int(px)
+        pt.y = int(py)
+        hmon = ctypes.windll.user32.MonitorFromPoint(pt, 2)  # NEAREST
+        mi = _MONITORINFO()
+        mi.cbSize = ctypes.sizeof(_MONITORINFO)
+        if ctypes.windll.user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+            left, top, right, bottom = mi.rcWork if work_area else mi.rcMonitor
+            return left, top, right - left, bottom - top
+    except Exception:
+        pass
+    return None
+
+
 # ─── Tray icon helpers ────────────────────────────────────────────────────────
 
 _tray_icon_cache: dict[str, Image.Image] = {}
@@ -1548,10 +1620,22 @@ _TRAY_COLORS = {
 #   theme.BORDER_MED  (2px, INK_MUTE) - floating containers, recording strip,
 #                                       hover card outline
 #   theme.BORDER_THIN (1px, INK_MUTE) - inline dividers between sections
+# v2.5.6: processing moved MUSTARD -> CORAL_SOFT. Mustard is the brand's
+# reserved "correction-watch" jewelry (the idle pulse) - reusing it for
+# processing diluted that meaning and broke the coral-family seamlessness of
+# the record -> process -> done flow. Now the whole flow stays in the coral
+# family (CORAL recording, CORAL_SOFT processing + done) and the STATES are
+# distinguished by MOTION, not hue. 'busy' keeps mustard because it's a true
+# "not ready, wait" warning outside the normal flow.
 _STATE_WAVE = {
-    "loading":    (theme.INFO,        theme.INK_SOFT, theme.INK_MUTE),
+    # v2.5.6: loading moved INFO (cool blue) -> CORAL_SOFT so the STARTUP
+    # waveform is on-brand. The whole lifecycle now lives in the coral family;
+    # only full-saturation CORAL is reserved for live recording (the "you're
+    # the star, talk" moment) while CORAL_SOFT carries the supporting states
+    # (warming up, processing, done).
+    "loading":    (theme.CORAL_SOFT,  theme.INK_SOFT, theme.INK_MUTE),
     "recording":  (theme.CORAL,       theme.INK_SOFT, theme.INK_MUTE),
-    "processing": (theme.MUSTARD,     theme.INK_SOFT, theme.INK_MUTE),
+    "processing": (theme.CORAL_SOFT,  theme.INK_SOFT, theme.INK_MUTE),
     "done":       (theme.CORAL_SOFT,  theme.INK_SOFT, theme.INK_MUTE),
     "no_speech":  (theme.INK_FAINT,   None,           theme.INK_MUTE),
     "busy":       (theme.MUSTARD,     theme.INK_SOFT, theme.INK_MUTE),
@@ -1568,11 +1652,15 @@ _STATE_WAVE = {
 #   done       → all bars high for ~900 ms, then auto-return to idle
 #   no_speech  → flat near-zero bars, auto-return after 1.5 s
 
-# v2.5.4: 44 -> 40 for a more compact strip. 40px gives the 18px button
-# glyphs comfortable room (11px above/below) without feeling chunky. Width
-# stays at 240 since horizontal proportions were already right.
-_W_WAVE,    _H_WAVE = 168, 40   # hold-to-talk: waveform only
-_W_WAVE_HF, _H_WAVE = 240, 40   # hands-free:  ✕ + waveform + Φ
+# v2.5.6: heights matched to the resting coin (32px) so the idle->record
+# transition is a SEAMLESS horizontal expansion with no vertical jump. Equal
+# heights mean coin and strip occupy the same vertical band; the strip just
+# extends leftward. Combined with pill-shaped end-caps (SetWindowRgn, see
+# _apply_window_region), the strip's 16px-radius right cap is identical to
+# the 32px coin sharing the same anchor corner, so the coin visually
+# stretches into the strip.
+_W_WAVE,    _H_WAVE = 168, 32   # hold-to-talk: waveform only
+_W_WAVE_HF, _H_WAVE = 240, 32   # hands-free:  ✕ + waveform + Φ
 _N_BARS  = 15
 _BAR_W   = 4
 _BAR_GAP = 2
@@ -1590,10 +1678,11 @@ _ACTIVE_ALPHA = float(_ap.get("active_alpha",    0.95))
 
 _IDLE_COLOR   = theme.CORAL   # unused now; mark colors come from theme tokens
 _IDLE_ALPHA   = float(_ap.get("idle_alpha", 0.45))
-# v2.5.2: 36px gives Φ-in-circle a premium coin look. Dark INK backdrop
-# inside the ring eliminates the anti-alias fringing that v2.5.1 had on
-# the transparent-key background.
-_W_DOT = _H_DOT = int(_ap.get("idle_size", 36))
+# v2.5.6: 32px to match the recording strip height EXACTLY. Equal heights
+# make idle->record a pure horizontal expansion (no vertical jump), and a
+# 32px circle == the strip's 16px-radius pill cap, so the coin appears to
+# stretch into the strip. Config 'idle_size' can still override.
+_W_DOT = _H_DOT = int(_ap.get("idle_size", 32))
 
 # Windows-only "transparent color" trick: any pixel rendered in this exact
 # RGB on a Toplevel becomes 100% transparent on screen. We use a magenta
@@ -1630,10 +1719,19 @@ class StatusWidget:
         except Exception:
             pass
 
-        sw = self.root.winfo_screenwidth()
-        sh = self.root.winfo_screenheight()
-        self._anchor_x = sw - 24
-        self._anchor_y = sh - 60
+        # Initial anchor: primary monitor work-area (excludes taskbar) +
+        # placement. The first heartbeat re-anchors to the cursor's monitor,
+        # but computing a correct work-area position here avoids a brief
+        # flash behind the taskbar at startup.
+        _prim = _get_monitor_bounds_for_point(0, 0, work_area=True)
+        if _prim:
+            _mx, _my, _mw, _mh = _prim
+        else:
+            _mx, _my = 0, 0
+            _mw = self.root.winfo_screenwidth()
+            _mh = self.root.winfo_screenheight()
+        self._anchor_x = self._placement_anchor_x(_mx, _mw)
+        self._anchor_y = _my + _mh - self._MARGIN_Y
         # Respect a user-dragged position from a previous session, if any.
         # Heartbeat's auto-anchor-to-cursor-monitor will skip while _user_placed
         # is True, so the widget stays exactly where the user put it.
@@ -1780,9 +1878,14 @@ class StatusWidget:
         self.root.protocol("WM_DELETE_WINDOW", _quit)
         self._apply_state("idle")
 
-        # Apply Windows 11 DWM rounded corners (silent no-op on Windows 10)
+        # Apply Windows 11 DWM rounded corners (fallback if SetWindowRgn fails)
         self.root.update()
         self._apply_dwm_round_corners()
+        # Guarantee the initial coin is clipped to a circle. The first
+        # _apply_state("idle") above may have run before the window was fully
+        # realized (winfo_width could read 1), so re-apply now that update()
+        # has materialized the window at its real size.
+        self._apply_window_region("circle")
 
         # ── Permanent topmost heartbeat ──────────────────────────────────────
         # Re-assert HWND_TOPMOST every 500 ms so the widget ALWAYS stays
@@ -1800,7 +1903,13 @@ class StatusWidget:
     # ── Private ───────────────────────────────────────────────────────────────
 
     def _apply_dwm_round_corners(self):
-        """Request Windows 11 DWM rounded corners. Silent no-op on Windows 10."""
+        """Request Windows 11 DWM rounded corners. Silent no-op on Windows 10.
+
+        Note: when a custom window region is set (see _apply_window_region),
+        Windows applies the REGION shape and ignores DWM corner rounding.
+        So this only takes effect as a fallback if SetWindowRgn fails - in
+        which case a DWM-rounded rectangle is a nicer degraded look than a
+        hard-edged box."""
         try:
             DWMWA_WINDOW_CORNER_PREFERENCE = 33
             DWMWCP_ROUND = 2   # fully rounded — was DWMWCP_ROUNDSMALL=3 (small rounding)
@@ -1815,10 +1924,132 @@ class StatusWidget:
         except Exception:
             pass  # Windows 10 / unsupported — no-op
 
+    def _apply_window_region(self, shape: str):
+        """Clip the widget window to a non-rectangular SHAPE via SetWindowRgn.
+
+        This is true geometric clipping at the Win32 level: genuinely
+        transparent outside the shape, with none of the color-key bleed that
+        plagued the old -transparentcolor approach (which we removed in
+        v2.5.5 after magenta corners leaked on some display setups).
+
+        The trade-off is a 1-bit (aliased) clip edge, but it is effectively
+        invisible here:
+          - idle coin: the coral ring is inset ~12% inside the clip circle,
+            so the aliased boundary falls in transparent margin. Only the
+            dark INK fill's circular edge is aliased - dark-on-desktop, the
+            least noticeable case.
+          - recording strip: the waveform and side glyphs are inset well
+            clear of the pill caps (a centered gaussian waveform keeps the
+            edge bars short), so only the INK pill outline is aliased.
+
+        MUST be re-applied on every SIZE change: the region is defined in
+        window pixel coordinates, so a stale 32x32 circle would clip a
+        resized 240x32 strip down to a tiny circle. _apply_state is the
+        single chokepoint for geometry changes and calls this after each
+        resize.
+
+        shape:
+          'circle' - idle coin: full ellipse (a circle for the square window)
+          'pill'   - recording strip: stadium (corner radius = height / 2,
+                     so the short ends are perfect semicircles)
+        """
+        try:
+            self.root.update_idletasks()   # flush the pending geometry change
+            w = self.root.winfo_width()
+            h = self.root.winfo_height()
+            if w <= 1 or h <= 1:
+                return
+
+            user32 = ctypes.windll.user32
+            gdi = ctypes.windll.gdi32
+            # 64-bit safety: without explicit types, ctypes marshals HWND/HRGN
+            # as 32-bit int and truncates the handle, so SetWindowRgn would
+            # target the wrong window or get a junk region. Declare pointer-
+            # width types. Idempotent - safe to set on every call.
+            user32.GetParent.restype = ctypes.c_void_p
+            user32.GetParent.argtypes = [ctypes.c_void_p]
+            gdi.CreateEllipticRgn.restype = ctypes.c_void_p
+            gdi.CreateRoundRectRgn.restype = ctypes.c_void_p
+            user32.SetWindowRgn.restype = ctypes.c_int
+            user32.SetWindowRgn.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int]
+
+            win_id = self.root.winfo_id()
+            hwnd = user32.GetParent(win_id) or win_id
+
+            # Region right/bottom edges are EXCLUSIVE, so +1 to include the
+            # final row/column of pixels.
+            if shape == "circle":
+                rgn = gdi.CreateEllipticRgn(0, 0, w + 1, h + 1)
+            else:  # 'pill' / stadium
+                # Ellipse axes = height -> corner radius = height/2, which
+                # rounds the short ends into full semicircles.
+                rgn = gdi.CreateRoundRectRgn(0, 0, w + 1, h + 1, h, h)
+            # SetWindowRgn takes OWNERSHIP of the GDI region object; the OS
+            # frees it. Do NOT DeleteObject(rgn) afterwards.
+            user32.SetWindowRgn(hwnd, rgn, True)
+        except Exception:
+            pass  # Non-Windows or API failure: window stays rectangular
+
     # ── Monitor-aware corner anchoring ──────────────────────────────────────
 
-    _MARGIN_X = 24   # px from the right edge of the work-area
-    _MARGIN_Y = 60   # px from the bottom edge
+    _MARGIN_X = 24   # px from the left/right edge of the work-area
+    # v2.5.6: was 60, which floated the dot high above the taskbar. 12px sits
+    # it JUST above the taskbar (the work-area bottom already excludes the
+    # taskbar, so this is a 12px breathing gap, not 12px from the screen edge).
+    _MARGIN_Y = 12   # px above the work-area bottom (just above the taskbar)
+
+    def _placement_anchor_x(self, mx: int, mw: int) -> int:
+        """Compute the anchor x for the current WIDGET_PLACEMENT within a
+        monitor work-area starting at mx with width mw.
+
+        The anchor's MEANING depends on placement (see _widget_left):
+          bottom_right  -> anchor = right edge
+          bottom_center -> anchor = horizontal center
+          bottom_left   -> anchor = left edge
+        """
+        if WIDGET_PLACEMENT == "bottom_center":
+            return mx + mw // 2
+        if WIDGET_PLACEMENT == "bottom_left":
+            return mx + self._MARGIN_X
+        return mx + mw - self._MARGIN_X   # bottom_right (default)
+
+    def _widget_left(self, w: int) -> int:
+        """Window left-x for a widget of width w, honoring the placement.
+
+        The widget grows from its anchor differently per placement so the
+        idle->record expansion reads naturally:
+          bottom_right  -> grows leftward  (anchor = right edge)
+          bottom_center -> grows symmetric (anchor = center)
+          bottom_left   -> grows rightward (anchor = left edge)
+
+        Manual drag (_user_placed) always uses bottom-right semantics because
+        _drag_move stores the dropped bottom-right corner as the anchor.
+        """
+        if self._user_placed or WIDGET_PLACEMENT == "bottom_right":
+            return self._anchor_x - w
+        if WIDGET_PLACEMENT == "bottom_center":
+            return self._anchor_x - w // 2
+        if WIDGET_PLACEMENT == "bottom_left":
+            return self._anchor_x
+        return self._anchor_x - w
+
+    def _reanchor_current_monitor(self):
+        """Recompute the anchor for the placement on the monitor the cursor
+        is currently on, and move the window there now. Used when the user
+        picks a new placement so the change is immediate."""
+        info = _get_cursor_monitor_info()
+        if info is not None:
+            hmon, (mx, my, mw, mh) = info
+            self._anchored_hmon = hmon
+        else:
+            mx, my = 0, 0
+            mw = self.root.winfo_screenwidth()
+            mh = self.root.winfo_screenheight()
+        self._anchor_x = self._placement_anchor_x(mx, mw)
+        self._anchor_y = my + mh - self._MARGIN_Y
+        w = self.root.winfo_width()
+        h = self.root.winfo_height()
+        self.root.geometry(f"{w}x{h}+{self._widget_left(w)}+{self._anchor_y - h}")
 
     def _anchor_to_monitor(self):
         """Re-anchor the dot to the bottom-right of whichever monitor the
@@ -1859,11 +2090,11 @@ class StatusWidget:
         log.debug(f"[Widget] cursor on new monitor (hmon={hmon}); following")
         self._anchored_hmon = hmon
         self._user_placed = False
-        self._anchor_x = mx + mw - self._MARGIN_X
+        self._anchor_x = self._placement_anchor_x(mx, mw)
         self._anchor_y = my + mh - self._MARGIN_Y
         w = self.root.winfo_width()
         h = self.root.winfo_height()
-        self.root.geometry(f"{w}x{h}+{self._anchor_x - w}+{self._anchor_y - h}")
+        self.root.geometry(f"{w}x{h}+{self._widget_left(w)}+{self._anchor_y - h}")
 
     def _is_offscreen(self) -> bool:
         """Return True if the widget is positioned outside all visible monitors."""
@@ -1895,10 +2126,10 @@ class StatusWidget:
         return False
 
     def reset_position(self):
-        """Move the widget back to the bottom-right of the primary monitor.
-        Called from the tray icon or when the widget is detected offscreen.
-        Also clears the user-placed flag so the heartbeat resumes cursor-
-        following and removes the saved position from config."""
+        """Move the widget back to its placement position on the cursor's
+        monitor (just above the taskbar). Called from the tray icon or when
+        the widget is detected offscreen. Clears the user-placed flag so the
+        heartbeat resumes cursor-following and removes the saved position."""
         try:
             self._user_placed = False
             try:
@@ -1912,16 +2143,12 @@ class StatusWidget:
                     log.info("Config: widget_position removed (reset_position)")
             except Exception:
                 pass
-            sw = self.root.winfo_screenwidth()
-            sh = self.root.winfo_screenheight()
-            self._anchor_x = sw - self._MARGIN_X
-            self._anchor_y = sh - self._MARGIN_Y
-            w = self.root.winfo_width()
-            h = self.root.winfo_height()
-            self.root.geometry(f"{w}x{h}+{self._anchor_x - w}+{self._anchor_y - h}")
+            # Re-anchor using the work area (excludes taskbar) + placement, so
+            # the dot lands just above the taskbar rather than behind it.
+            self._reanchor_current_monitor()
             self.root.deiconify()
             self._force_topmost()
-            log.info("Widget position reset to primary monitor bottom-right")
+            log.info(f"Widget position reset ({WIDGET_PLACEMENT}, above taskbar)")
         except Exception as e:
             log.error(f"Failed to reset widget position: {e}")
 
@@ -2000,15 +2227,31 @@ class StatusWidget:
             self.root.attributes("-alpha", 1.0)
             self.root.geometry(
                 f"{_W_DOT}x{_H_DOT}"
-                f"+{self._anchor_x - _W_DOT}+{self._anchor_y - _H_DOT}"
+                f"+{self._widget_left(_W_DOT)}+{self._anchor_y - _H_DOT}"
             )
+            # Clip the square window to a circle so the coin is a true round
+            # mark (no square/squircle corners). Synchronous so the region
+            # matches the size we just set.
+            self._apply_window_region("circle")
             # Defer one tick so the Canvas has its dimensions before drawing
             self.root.after(0, self._refresh_idle_color)
         else:
             # Use the captured hands_free value (passed from set_state) so the
             # layout matches what was true at the moment of the call.
             hands_free_recording = (state == "recording" and hands_free_snap)
-            w_outer = _W_WAVE_HF if hands_free_recording else _W_WAVE
+
+            # Pill width is LOCKED across a record -> process -> done flow so it
+            # never resizes mid-session (the old code dropped from 240 to 168
+            # when hands-free recording handed off to processing). We capture
+            # the width when recording begins and reuse it for the follow-on
+            # states. Loading / busy use the compact width.
+            if state == "recording":
+                self._session_width = _W_WAVE_HF if hands_free_snap else _W_WAVE
+                w_outer = self._session_width
+            elif state in ("processing", "done", "no_speech"):
+                w_outer = getattr(self, "_session_width", _W_WAVE)
+            else:  # loading, busy
+                w_outer = _W_WAVE
 
             self._dot.pack_forget()
             border = _STATE_WAVE.get(state, ("", None, _BORDER_COLOR))[2]
@@ -2017,10 +2260,15 @@ class StatusWidget:
             self.root.attributes("-alpha", _ACTIVE_ALPHA)
             self.root.geometry(
                 f"{w_outer}x{_H_WAVE}"
-                f"+{self._anchor_x - w_outer}+{self._anchor_y - _H_WAVE}"
+                f"+{self._widget_left(w_outer)}+{self._anchor_y - _H_WAVE}"
             )
+            # Clip to a pill (stadium) shape. The right cap is a 16px-radius
+            # semicircle = the resting coin, so the coin appears to stretch
+            # into the strip. Synchronous so the region matches the new size.
+            self._apply_window_region("pill")
             self._bar_h      = [0.08] * _N_BARS
             self._anim_phase = 0.0
+            self._done_frame = 0   # fresh start for the done settle animation
 
             # ── Pack inner children based on state ───────────────────────────
             if hands_free_recording:
@@ -2065,44 +2313,178 @@ class StatusWidget:
 
         if state == "recording":
             wave, glow, _ = _STATE_WAVE["recording"]
-            level = 0.05
-            try:
-                if _audio_frames:
-                    chunk = _audio_frames[-1].flatten()
-                    level = float(np.sqrt(np.mean(chunk ** 2)))
-                    level = min(1.0, level * 18)
-            except Exception:
-                pass
-            level = max(0.05, level)
+            targets = self._compute_fft_bars()
             for i in range(_N_BARS):
-                centre = (i - (_N_BARS - 1) / 2) / ((_N_BARS - 1) / 2)
-                env    = math.exp(-0.5 * centre ** 2)
-                target = level * env * (0.65 + 0.35 * random.random())
-                target = max(0.08, target)
-                self._bar_h[i] = self._bar_h[i] * 0.55 + target * 0.45
+                t = targets[i]
+                # Asymmetric smoothing: fast attack, slow release. Bars snap
+                # up to the sound instantly then ease back down - the "peak
+                # meter" feel that reads alive/premium rather than mushy.
+                if t > self._bar_h[i]:
+                    self._bar_h[i] = self._bar_h[i] * 0.35 + t * 0.65
+                else:
+                    self._bar_h[i] = self._bar_h[i] * 0.80 + t * 0.20
+            self._draw_bars(self._bar_h, wave, glow)
+
+        elif state == "loading":
+            # "Warming up" (startup): a calm symmetric BREATH - bars swell and
+            # ebb together with a soft center bias and a gentle shimmer, like
+            # the app inhaling as it wakes. On-brand coral, distinct from the
+            # reactive recording bloom and the processing flow. Loops until the
+            # model is ready, however long that takes.
+            wave, glow, _ = _STATE_WAVE["loading"]
+            self._anim_phase += 0.16                       # slow, calm
+            breath = 0.5 + 0.5 * math.sin(self._anim_phase)   # global 0..1
+            center = (_N_BARS - 1) / 2.0
+            for i in range(_N_BARS):
+                d = abs(i - center) / center               # symmetric
+                shimmer = 0.5 + 0.5 * math.sin(self._anim_phase * 1.3 - d * 3.0)
+                env = 1.0 - 0.30 * d                        # center a touch taller
+                self._bar_h[i] = 0.08 + 0.28 * breath * env * (0.55 + 0.45 * shimmer)
             self._draw_bars(self._bar_h, wave, glow)
 
         elif state == "processing":
+            # "Thinking" flow: a sum of three traveling waves at INCOMMENSURATE
+            # frequencies, so the pattern is quasi-periodic and never visibly
+            # repeats. This kills the monotony of a single looping ripple on
+            # long transcriptions while staying calm and on-brand. Symmetric
+            # about the center (uses distance-from-center) so it matches the
+            # bass-center language of recording and suits the centered pill.
             wave, glow, _ = _STATE_WAVE["processing"]
-            self._anim_phase += 0.25
-            if self._anim_phase > 1000.0:
-                self._anim_phase -= 1000.0
+            self._anim_phase += 0.30
+            p = self._anim_phase
+            center = (_N_BARS - 1) / 2.0
             for i in range(_N_BARS):
-                phase = self._anim_phase + i * (2 * math.pi / _N_BARS)
-                self._bar_h[i] = 0.12 + 0.55 * (math.sin(phase) * 0.5 + 0.5)
+                d = abs(i - center) / center               # 0 center .. 1 edge
+                # Ratios 1 : 0.61 : 1.7 are mutually irrational-ish, so the
+                # summed wave does not settle into an obvious loop.
+                w = (        math.sin(p          - d * 2.2)
+                     + 0.6 * math.sin(p * 0.61   - d * 3.7)
+                     + 0.4 * math.sin(p * 1.70   + d * 1.3))
+                norm = (w / 2.0) * 0.5 + 0.5               # ~0..1
+                norm = min(1.0, max(0.0, norm))
+                self._bar_h[i] = 0.10 + 0.32 * norm
             self._draw_bars(self._bar_h, wave, glow)
 
         elif state == "done":
+            # Confident "settle": bloom to full, then collapse inward toward
+            # the center and fade out (outer bars fall first), resolving the
+            # energy to the middle before the pill morphs back to the coin.
+            # The done cue plays once, on the first frame.
             wave, glow, _ = _STATE_WAVE["done"]
-            self._draw_bars([0.9] * _N_BARS, wave, glow)
-            _play_cue("done")
-            self._anim_job = self.root.after(900, lambda: self._apply_state("idle"))
+            df = getattr(self, "_done_frame", 0)
+            if df == 0:
+                _play_cue("done")
+            df += 1
+            self._done_frame = df
+            total = 9                       # ~9 frames * 80ms ≈ 720ms
+            progress = min(1.0, df / total)
+            center = (_N_BARS - 1) / 2.0
+            bars = []
+            for i in range(_N_BARS):
+                d = abs(i - center) / center        # 0 center .. 1 edge
+                # Outer bars (high d) decay sooner -> energy gathers to center.
+                # Tuned so edges hit floor by ~halfway and the center fully
+                # resolves to floor by the final frame, for a clean settle
+                # before the pill morphs back to the coin.
+                local = max(0.0, 1.0 - progress * (1.0 + 1.0 * d))
+                bars.append(0.06 + 0.86 * local)
+            self._draw_bars(bars, wave, glow)
+            if df >= total:
+                self._done_frame = 0
+                self._apply_state("idle")
+            else:
+                self._anim_job = self.root.after(80, self._animate)
             return
 
         else:
             return
 
         self._anim_job = self.root.after(80, self._animate)
+
+    def _compute_fft_bars(self):
+        """Real FFT frequency-spectrum bar heights (0..1), one per _N_BARS.
+
+        Research finding (Wispr Flow / superwhisper-class apps and audio-viz
+        UX guides): the "alive" look comes from a true FREQUENCY SPECTRUM,
+        where each bar is a frequency band and the bars dance to the actual
+        spectral content of your voice - not a single amplitude scaled by a
+        fixed envelope + random jitter (which reads uniform and fake).
+
+        Design choices grounded in that research:
+          - log-spaced bands across the voice range (~80 Hz to ~4 kHz),
+            since pitch perception is logarithmic
+          - sqrt magnitude compression (raw FFT magnitudes are very peaky)
+          - adaptive normalization via a slowly-decaying running peak, so
+            quiet and loud voices are both well-scaled
+          - BASS-CENTER SYMMETRIC layout: the lowest band sits in the middle
+            and higher bands mirror outward to both ends. Voice energy is
+            low-mid heavy, so the strip "blooms" from the center - which is
+            exactly the motion that suits the new bottom-center placement.
+
+        Returns a small baseline floor on silence or any failure so the
+        strip never looks dead."""
+        floor = 0.06
+        try:
+            if not _audio_frames:
+                return [floor] * _N_BARS
+            # Most recent ~2048 samples (~128ms @16kHz): a stable spectrum
+            # with no perceptible lag. Concatenate the last few callback
+            # chunks in case the block size is small.
+            recent = list(_audio_frames)[-6:]
+            chunk = np.concatenate([f.flatten() for f in recent]).astype(np.float32)
+            if chunk.size < 128:
+                return [floor] * _N_BARS
+            chunk = chunk[-2048:]
+
+            # Silence gate. Without this, the adaptive normalization below
+            # divides by an ever-shrinking running peak during quiet moments,
+            # so background noise gets amplified to full scale and the strip
+            # "blooms on its own" even when you are not speaking. If the raw
+            # signal RMS is below a speech floor, decay the peak and return a
+            # flat baseline so the strip rests calmly until you actually talk.
+            rms = float(np.sqrt(np.mean(chunk ** 2)))
+            _SILENCE_RMS = 0.008   # ~-42 dBFS; well below normal speech (~0.05+)
+            if rms < _SILENCE_RMS:
+                self._fft_peak = max(getattr(self, "_fft_peak", 1e-6) * 0.92, 1e-6)
+                return [floor] * _N_BARS
+
+            # Hann window curbs spectral leakage between adjacent bands.
+            windowed = chunk * np.hanning(chunk.size).astype(np.float32)
+            spectrum = np.abs(np.fft.rfft(windowed))
+            freqs = np.fft.rfftfreq(chunk.size, 1.0 / SAMPLE_RATE)
+
+            # Half as many bands as bars; we mirror them for the symmetric look.
+            n_half = (_N_BARS + 1) // 2
+            edges = np.logspace(np.log10(80.0), np.log10(4000.0), n_half + 1)
+            half = np.empty(n_half, dtype=np.float32)
+            for b in range(n_half):
+                mask = (freqs >= edges[b]) & (freqs < edges[b + 1])
+                half[b] = spectrum[mask].mean() if np.any(mask) else 0.0
+
+            half = np.sqrt(half)   # perceptual compression
+
+            # Adaptive normalization: track a decaying running peak so the
+            # bars auto-scale to the current speaking volume.
+            cur_peak = float(half.max())
+            prev_peak = getattr(self, "_fft_peak", 1e-6)
+            peak = max(cur_peak, prev_peak * 0.92, 1e-6)
+            self._fft_peak = peak
+            norm = np.clip(half / peak, 0.0, 1.0)
+            norm = floor + (1.0 - floor) * norm   # lift off the floor
+
+            # Mirror into a bass-center symmetric array. Center bar = lowest
+            # band; higher bands fan outward to both edges.
+            bars = [floor] * _N_BARS
+            center = _N_BARS // 2
+            for k in range(n_half):
+                v = float(norm[k])
+                if center - k >= 0:
+                    bars[center - k] = v
+                if center + k < _N_BARS:
+                    bars[center + k] = v
+            return bars
+        except Exception:
+            return [floor] * _N_BARS
 
     # ── Waveform renderers ───────────────────────────────────────────────
     # Each style draws the same `heights` data (15 floats 0..1 representing
@@ -2445,6 +2827,19 @@ class StatusWidget:
                 command=lambda s=style_id: _set_waveform_style(s),
             )
         m.add_cascade(label="Waveform  ▸", menu=wave_menu)
+
+        # ── Placement submenu ─────────────────────────────────────────────────
+        # Where the dot rests on the active monitor. Composes with cursor-
+        # follow (anchors at this spot on whichever monitor you're on).
+        place_menu = self._styled_menu(m)
+        for place_id, place_label in WIDGET_PLACEMENTS:
+            active = (WIDGET_PLACEMENT == place_id)
+            lbl    = f"✓  {place_label}" if active else f"    {place_label}"
+            place_menu.add_command(
+                label=lbl,
+                command=lambda p=place_id: _set_widget_placement(p),
+            )
+        m.add_cascade(label="Placement  ▸", menu=place_menu)
         m.add_separator()
 
         # ── History & Dictionary ──────────────────────────────────────────────
@@ -2556,6 +2951,36 @@ class StatusWidget:
         # nothing to preserve via a grace period.
         self._hide_hover_card()
 
+    def _status_for_card(self):
+        """Return (label, color) for the hover-card status pill, reflecting
+        what Cait is doing right now. Priority order: live activity first,
+        then actionable idle sub-states, then resting/ready.
+
+        The Ready vs Resting split is meaningful: Ready = model loaded, next
+        dictation is instant; Resting = model was unloaded after idle to free
+        RAM, so the next dictation has a brief wake before it starts."""
+        state = self._state
+        if state == "recording":
+            return ("Listening", theme.CORAL)
+        if state == "processing":
+            return ("Transcribing", theme.CORAL_SOFT)
+        if state == "loading":
+            return ("Warming up", theme.INFO)
+
+        # Idle sub-states, most actionable first.
+        if _correction_active:
+            return ("Waiting to learn", theme.MUSTARD)
+        if _one_shot_command:
+            return ("Command armed", theme.CORAL)
+        if _command_mode:
+            return ("Command mode", theme.CORAL)
+        if _asr_model is None:
+            # Distinguish "never loaded yet" from "unloaded after idle".
+            if _last_asr_use_time > 0:
+                return ("Resting", theme.INK_FAINT)   # wakes on next dictation
+            return ("Warming up", theme.INFO)          # first load in progress
+        return ("Ready", theme.CORAL_SOFT)
+
     def _show_hover_card(self):
         """Build and display the hover card with current state."""
         self._hover_show_job = None
@@ -2568,7 +2993,6 @@ class StatusWidget:
         except Exception:
             pass
 
-        lines = self._build_hover_lines()
         card = tk.Toplevel(self.root)
         card.overrideredirect(True)
         card.attributes("-topmost", True)
@@ -2589,11 +3013,10 @@ class StatusWidget:
                          highlightthickness=theme.BORDER_THIN)
         frame.pack()
 
-        # Title strip: brand mark + full "Cait. whisper" lockup. The mark
-        # is the icon-form of the brand; the lockup is the wordmark-form.
-        # Together they identify the product unambiguously.
+        # Title strip: brand mark + "Cait. whisper" lockup on the left, a
+        # live status pill on the right. fill="x" so the status right-aligns.
         title_row = tk.Frame(frame, bg=theme.INK_SOFT)
-        title_row.pack(anchor="w", pady=(0, theme.PAD_SM))
+        title_row.pack(anchor="w", fill="x", pady=(0, theme.PAD_SM))
         try:
             mark_photo = theme.get_mark_photo(
                 18, border_color=theme.CORAL,
@@ -2609,28 +3032,100 @@ class StatusWidget:
                            cait_size=12, period_size=14,
                            whisper_size=12).pack(side="left")
 
-        for label, value in lines:
-            row = tk.Frame(frame, bg=theme.INK_SOFT)
-            row.pack(anchor="w", fill="x", pady=1)
-            tk.Label(row, text=label, bg=theme.INK_SOFT, fg=theme.INK_FAINT,
-                     font=theme.t_small(), width=14, anchor="w").pack(side="left")
-            tk.Label(row, text=value, bg=theme.INK_SOFT, fg=theme.PAPER_WARM,
-                     font=theme.t_small()).pack(side="left", anchor="w")
+        # Status pill (top-right): a small coloured dot + a friendly word for
+        # what Cait is doing right now. Tells the user at a glance whether the
+        # next dictation is instant (Ready) or has a brief wake (Resting), and
+        # surfaces the actionable states (Waiting to learn, Command mode).
+        status_text, status_color = self._status_for_card()
+        status_wrap = tk.Frame(title_row, bg=theme.INK_SOFT)
+        status_wrap.pack(side="right", padx=(theme.PAD_LG, 0))
+        dot = tk.Canvas(status_wrap, width=8, height=8, bg=theme.INK_SOFT,
+                        highlightthickness=0, borderwidth=0)
+        dot.create_oval(1, 1, 7, 7, fill=status_color, outline="")
+        dot.pack(side="left", padx=(0, 5), pady=(0, 1))
+        tk.Label(status_wrap, text=status_text, bg=theme.INK_SOFT,
+                 fg=status_color, font=theme.t_caption()).pack(side="left")
+
+        # ── Engine (full-width row; its value is long) ────────────────────
+        eng_row = tk.Frame(frame, bg=theme.INK_SOFT)
+        eng_row.pack(anchor="w", fill="x", pady=(0, theme.PAD_SM))
+        tk.Label(eng_row, text="Engine", bg=theme.INK_SOFT, fg=theme.INK_FAINT,
+                 font=theme.t_caption(), width=11, anchor="w").pack(side="left")
+        tk.Label(eng_row, text=f"{_current_engine} · {_current_model}",
+                 bg=theme.INK_SOFT, fg=theme.PAPER_WARM,
+                 font=theme.t_small()).pack(side="left")
+
+        # ── Settings grid: 2 columns so the 7 toggles take ~4 rows, not 7.
+        # Each chip is a quiet dim label + a value coloured by state (active
+        # = coral, off = faint), so you read the whole config at a glance
+        # without the card growing tall.
+        mode_label = "COMMAND" if _command_mode else "PURE"
+        if _one_shot_command:
+            mode_label = "COMMAND·1shot"
+        chips = [
+            ("Mode",         mode_label, (_command_mode or _one_shot_command)),
+            ("Auto-Learn",   "ON" if _auto_learn_enabled else "OFF", _auto_learn_enabled),
+            ("Two-Pass",     "ON" if _two_pass_enabled else "OFF", _two_pass_enabled),
+            ("Screen Ctx",   "ON" if _use_screen_context else "OFF", _use_screen_context),
+            ("LLM Cleanup",  "ON" if _post_process else "OFF", _post_process),
+            ("Spoken Punct", "ON" if _spoken_punct else "OFF", _spoken_punct),
+            ("Dev Logs",     "ON" if _dev_logs else "OFF", _dev_logs),
+        ]
+        grid = tk.Frame(frame, bg=theme.INK_SOFT)
+        grid.pack(anchor="w", fill="x")
+        for idx, (lab, val, on) in enumerate(chips):
+            r, c = divmod(idx, 2)
+            cell = tk.Frame(grid, bg=theme.INK_SOFT)
+            cell.grid(row=r, column=c, sticky="w", padx=(0, theme.PAD_LG), pady=1)
+            tk.Label(cell, text=lab, bg=theme.INK_SOFT, fg=theme.INK_FAINT,
+                     font=theme.t_caption(), width=11, anchor="w").pack(side="left")
+            tk.Label(cell, text=val, bg=theme.INK_SOFT,
+                     fg=(theme.CORAL if on else theme.INK_FAINT),
+                     font=theme.t_caption()).pack(side="left")
+
+        # ── Watching status (only when correction-watch is armed) ─────────
+        if _correction_active:
+            w_row = tk.Frame(frame, bg=theme.INK_SOFT)
+            w_row.pack(anchor="w", fill="x", pady=(theme.PAD_SM, 0))
+            tk.Label(w_row, text="Watching", bg=theme.INK_SOFT, fg=theme.MUSTARD,
+                     font=theme.t_caption(), width=11, anchor="w").pack(side="left")
+            tk.Label(w_row, text="press Enter to teach", bg=theme.INK_SOFT,
+                     fg=theme.MUSTARD, font=theme.t_caption()).pack(side="left")
+
+        # ── Last paste (the most useful glance; full text, wrapped) ───────
+        theme.divider_frame(frame).pack(fill="x", pady=(theme.PAD_MD, theme.PAD_SM))
+        tk.Label(frame, text="LAST PASTE", bg=theme.INK_SOFT, fg=theme.CORAL,
+                 font=theme.t_eyebrow(), anchor="w").pack(anchor="w")
+        last = _last_transcription or ""
+        if last:
+            # Generous cap so very long dictations don't make an absurd card,
+            # but we show far more than the old 37-char one-liner.
+            shown = last if len(last) <= 320 else last[:317] + "..."
+        else:
+            shown = "Nothing dictated yet."
+        tk.Label(frame, text=shown, bg=theme.INK_SOFT,
+                 fg=(theme.PAPER if last else theme.INK_FAINT),
+                 font=theme.t_small(), justify="left", anchor="w",
+                 wraplength=300).pack(anchor="w", fill="x", pady=(2, 0))
 
         # Position: directly ABOVE the widget with a generous buffer so the
         # cursor travel path from any content above down to the dot is never
         # blocked by the card. Fall back to BELOW only if above would clip
-        # the top of the virtual screen.
+        # the top of the monitor.
         #
         # Critical: use winfo_rootx/rooty, NOT winfo_x/winfo_y. On a Toplevel
         # created with overrideredirect(True) under Windows, winfo_x may
         # return parent-relative coordinates (often 0) rather than screen
         # coordinates. rootx/rooty are always absolute screen coordinates.
         #
-        # Also: use the VIRTUAL SCREEN bounds (all monitors combined), not
-        # winfo_screenwidth which reports only the primary monitor. Without
-        # this, a widget dragged to a secondary monitor has its hover card
-        # yanked back to the primary monitor edge.
+        # v2.5.6 fix: clamp to the bounds of the monitor the WIDGET is on,
+        # NOT the virtual screen (all monitors combined). The old virtual-
+        # screen clamp let the card spill across the bezel onto a neighbour
+        # monitor whenever the widget sat near a shared edge: the card was
+        # centered on the widget, and since the virtual-screen right edge is
+        # the FAR edge of the second monitor, no clamp fired and the card
+        # bled / got truncated at the physical bezel. Confining to the
+        # widget's own monitor keeps the whole card on one screen.
         card.update_idletasks()
         card_w = card.winfo_width()
         card_h = card.winfo_height()
@@ -2639,28 +3134,33 @@ class StatusWidget:
         widget_w = self.root.winfo_width()
         widget_h = self.root.winfo_height()
 
-        try:
-            gm = ctypes.windll.user32.GetSystemMetrics
-            virt_x = gm(76)   # SM_XVIRTUALSCREEN   (left-most monitor origin)
-            virt_y = gm(77)   # SM_YVIRTUALSCREEN
-            virt_w = gm(78)   # SM_CXVIRTUALSCREEN  (total width across all monitors)
-            virt_h = gm(79)   # SM_CYVIRTUALSCREEN  (total height)
-        except Exception:
-            # Fallback to primary-only metrics if ctypes call fails
-            virt_x = 0
-            virt_y = 0
-            virt_w = self.root.winfo_screenwidth()
-            virt_h = self.root.winfo_screenheight()
+        # Find the monitor that contains the widget's center point.
+        center_x = widget_x + widget_w // 2
+        center_y = widget_y + widget_h // 2
+        bounds = _get_monitor_bounds_for_point(center_x, center_y, work_area=True)
+        if bounds is None:
+            # Fallback: virtual-screen bounds (old behavior) if the Win32
+            # monitor query fails. Better a card that might bleed than no card.
+            try:
+                gm = ctypes.windll.user32.GetSystemMetrics
+                bounds = (gm(76), gm(77), gm(78), gm(79))
+            except Exception:
+                bounds = (0, 0, self.root.winfo_screenwidth(),
+                          self.root.winfo_screenheight())
+        mon_x, mon_y, mon_w, mon_h = bounds
 
-        # Horizontal: center the card on the widget, clamped to virtual screen
+        # Horizontal: center the card on the widget, clamped to THIS monitor.
+        # If the card is wider than the monitor (shouldn't happen) the max()
+        # wins so the left edge stays on-screen.
         x = widget_x + (widget_w // 2) - (card_w // 2)
-        x = max(virt_x + 8, min(x, virt_x + virt_w - card_w - 8))
+        x = max(mon_x + 8, min(x, mon_x + mon_w - card_w - 8))
 
-        # Vertical: prefer ABOVE the widget with a 12 px gap. Fallback to BELOW.
+        # Vertical: prefer ABOVE the widget with a 12 px gap. Fall back to
+        # BELOW only if above would clip the top of this monitor.
         y = widget_y - card_h - 12
-        if y < virt_y + 8:
+        if y < mon_y + 8:
             y = widget_y + widget_h + 12
-        y = min(y, virt_y + virt_h - card_h - 8)
+        y = min(y, mon_y + mon_h - card_h - 8)
 
         card.geometry(f"+{x}+{y}")
         self._hover_card = card
@@ -2673,30 +3173,6 @@ class StatusWidget:
             except Exception:
                 pass
             self._hover_card = None
-
-    def _build_hover_lines(self):
-        """Produce the rows shown in the hover card."""
-        rows = []
-        rows.append(("Engine", f"{_current_engine} · {_current_model}"))
-        # Mode reporting: sticky COMMAND beats PURE; one-shot is shown
-        # additionally when active so the user knows a command is inbound.
-        mode_label = "COMMAND (sticky)" if _command_mode else "PURE"
-        if _one_shot_command:
-            mode_label = "COMMAND (one-shot)"
-        rows.append(("Mode", mode_label))
-        rows.append(("Auto-Learn", "ON" if _auto_learn_enabled else "OFF"))
-        rows.append(("Two-Pass", "ON" if _two_pass_enabled else "OFF"))
-        rows.append(("Screen Ctx", "ON" if _use_screen_context else "OFF"))
-        rows.append(("LLM Cleanup", "ON" if _post_process else "OFF"))
-        rows.append(("Spoken Punct", "ON" if _spoken_punct else "OFF"))
-        rows.append(("Dev Logs", "ON" if _dev_logs else "OFF"))
-        if _correction_active:
-            rows.append(("Watching", "press Enter to teach"))
-        last = _last_transcription
-        if last:
-            preview = last if len(last) < 40 else last[:37] + "..."
-            rows.append(("Last paste", preview))
-        return rows
 
     def _toggle_llm(self):
         global _post_process

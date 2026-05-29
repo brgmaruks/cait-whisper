@@ -2,6 +2,74 @@
 
 All notable changes to cait-whisper will be documented in this file.
 
+## [2.5.6] - 2026-05-29
+
+Widget motion + placement polish. A pass focused entirely on how the floating
+widget looks and moves: a true coin<->pill morph, a real frequency-spectrum
+waveform, placement options, and premium startup/processing/done animations.
+The ASR pipeline is unchanged.
+
+### Added
+- **Coin <-> pill morph** via `SetWindowRgn`. The window is now clipped to an
+  actual shape - a circle when idle, a stadium (pill) when active - so the
+  resting coin appears to stretch into the recording strip. True geometric
+  clipping, not the old color-key trick (which leaked magenta corners on some
+  displays). Heights matched at 32px so there is no vertical jump.
+- **Real FFT frequency-spectrum waveform** while recording. Each bar is a
+  log-spaced frequency band across the voice range, laid out bass-center and
+  symmetric so the strip blooms from the middle and reacts to the actual
+  spectral content of your voice. Adaptive normalization + fast-attack/slow-
+  release smoothing for a "peak meter" feel. Replaces the old amplitude-times-
+  gaussian-times-random pulse.
+- **Placement submenu** (right-click -> Placement): Bottom center (new
+  default), Bottom right, Bottom left. Composes with cursor-follow; the strip
+  expands symmetrically at center, leftward at right, rightward at left.
+  Persists to config as `widget_placement`.
+- **Premium startup animation**. The "warming up" state now runs a calm
+  on-brand coral breathing bloom while the model loads (previously it drew a
+  single blank frame and stopped - the loading state had no animation at all).
+- **Hover-card status pill** (top-right): a live, color-coded word for what
+  Cait is doing - Ready / Resting / Warming up / Listening / Transcribing /
+  Waiting to learn / Command mode. The Ready-vs-Resting split tells you
+  whether the next dictation is instant or has a brief model-wake.
+- **Waveform style persistence** already shipped in 2.5.5; this release wires
+  the FFT data through every style.
+
+### Changed
+- **Default placement is now bottom-center** (Wispr Flow / superwhisper
+  convention) instead of bottom-right.
+- **Widget rests just above the taskbar**. The vertical margin dropped from
+  60px to 12px (it was floating far above the taskbar). Reset Position and the
+  startup anchor now use the monitor work area so the dot never lands behind
+  the taskbar.
+- **Processing animation** is now an organic multi-wave flow (three sine waves
+  at incommensurate frequencies) so it never visibly repeats - fixes the
+  monotony of the old single looping ripple on long transcriptions.
+- **Done animation** is a "gather to center and settle" (outer bars fall
+  first, center resolves last) instead of a static full-height block.
+- **State colors consolidated into the coral family.** Processing moved from
+  MUSTARD to CORAL_SOFT (mustard is reserved for the correction-watch pulse);
+  startup loading moved from INFO blue to CORAL_SOFT. Only live recording uses
+  full-saturation CORAL, so the moment you are actually talking reads as
+  primary. States are now distinguished by MOTION, not hue.
+- **Active strip width is locked** across the record -> process -> done flow,
+  so a hands-free session no longer shrinks from 240px to 168px mid-flow.
+- **Hover card redesigned**: the 7 settings toggles are now a compact two-
+  column grid (4 rows instead of 7) with values colored by state, freeing
+  vertical room for a dedicated "Last paste" section that shows the full text
+  wrapped over multiple lines (up to 320 chars) instead of a 37-char one-liner.
+
+### Fixed
+- **Hover card bled across the monitor bezel.** It clamped to the virtual-
+  screen bounds (all monitors combined) instead of the widget's own monitor,
+  so near a shared edge it spilled onto / was truncated by the neighbour
+  screen. Now confined to the monitor the widget sits on.
+- **Waveform bloomed during silence.** The adaptive normalization amplified
+  background noise to full scale when you went quiet. Added a silence gate
+  (RMS floor) so the strip rests flat until you actually speak.
+- **Cross-monitor follow** edge cases from the placement rework verified;
+  manual drag still overrides until the next placement pick or monitor hop.
+
 ## [2.5.5] - 2026-05-28
 
 Headline: ASR pipeline is unchanged. Everything else got a full visual and UX overhaul so the app looks and feels like a 1.0 product instead of a tool-by-engineers.

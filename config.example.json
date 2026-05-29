@@ -26,7 +26,7 @@
         "active_alpha":        0.82,
         "idle_color":          "#909090",
         "idle_alpha":          0.64,
-        "idle_size":           24
+        "idle_size":           32
     },
     "audio_cue": "subtle",
     "waveform_style": "bars_mirror",
@@ -36,5 +36,6 @@
     "two_pass": true,
     "use_screen_context": false,
     "retro_enabled": false,
-    "widget_follow_cursor": false
+    "widget_follow_cursor": false,
+    "widget_placement": "bottom_center"
 }

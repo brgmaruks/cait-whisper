@@ -5,14 +5,14 @@ You've run `setup.bat`. Now what?
 ## First launch
 
 1. Double-click `start.bat`. Accept the UAC prompt.
-2. A small dot appears somewhere near the bottom-right of your screen.
-3. The dot will briefly flash green when the ASR model is loaded and ready (about 3-5 seconds on first launch).
-4. When the dot is gray and sitting still, you're ready.
+2. A small coin (a coral Φ-in-circle mark) appears at the bottom-center of your screen, just above the taskbar.
+3. While the model loads, the coin breathes coral. The very first launch downloads the model weights, which can take up to a minute depending on your connection; after that it's cached and loads in a few seconds.
+4. When the coin settles to a quiet gray Φ and flashes coral once, you're ready.
 
 ## Your first dictation
 
 1. Open Notepad, or click into any text field anywhere (email, chat, doc, form).
-2. **Hold `Ctrl + Win` and speak.** The dot will grow and show a waveform animation.
+2. **Hold `Ctrl + Win` and speak.** The coin stretches into a pill showing a live waveform that reacts to your voice.
 3. **Release.** A short delay (less than a second for Moonshine, a couple of seconds for Whisper), then your words appear.
 
 That's it. This is the core experience. Every other feature is optional.
@@ -40,7 +40,7 @@ When a word comes out wrong, just correct it in place and press **Enter**. Examp
 - You say "Cait"
 - It pastes "Kate"
 - You edit it to "Cait" and press Enter
-- The dot turns **amber and pulses**, telling you it's watching
+- The coin turns **amber and pulses**, telling you it's watching (hover it and the status reads "Waiting to learn")
 - Do the same correction again. On the second time the word gets promoted to your personal dictionary. From then on, "Kate" automatically becomes "Cait" whenever cait-whisper hears it.
 
 You can see and manage the dictionary via the right-click menu -> History & Dictionary.
@@ -49,10 +49,10 @@ You can see and manage the dictionary via the right-click menu -> History & Dict
 
 cait-whisper has two modes:
 
-- **PURE mode** (default, gray dot): everything you say becomes text.
-- **COMMAND mode** (blue ring dot): short utterances are classified as commands and executed.
+- **PURE mode** (default): the coin is a quiet gray Φ. Everything you say becomes text.
+- **COMMAND mode**: the coin fills solid coral. Short utterances are classified as commands and executed.
 
-**Switch modes** with `Shift + Alt + M`, or right-click the dot and select "Mode: PURE" / "Mode: COMMAND".
+**For a single command**, press `Shift + Alt + C` (one-shot: speak one command, then it reverts to PURE automatically). **For sticky COMMAND mode**, right-click the coin and toggle "Sticky COMMAND mode".
 
 In COMMAND mode you can say:
 
@@ -72,17 +72,22 @@ Selection-based commands require Ollama. See [installation.md](installation.md).
 
 ## Hover for status at a glance
 
-Move your cursor over the dot. A small panel appears showing the current engine, mode, and every feature's state. Move the cursor away and it disappears.
+Move your cursor over the coin. A card fades in with a live status pill in the top-right (Ready, Resting, Listening, Waiting to learn, and so on), your engine, every feature's state in a compact two-column grid, and a "Last paste" section showing the full text of what you last dictated. Move the cursor away and it disappears.
 
 ## Right-click for everything else
 
-Right-click the dot to see:
+Right-click the coin to see:
 
 - Switch Model (Moonshine, Whisper variants, Parakeet)
-- Audio cues (subtle, chime, click, scifi, off)
-- History & Dictionary (separate window)
+- Re-transcribe last (try the saved audio on a different model)
+- Microphone (pick your input device)
+- Audio Cues (subtle, chime, click, scifi, off)
+- Waveform (six visual styles for the recording strip)
+- Placement (bottom center, bottom right, bottom left)
+- History & Dictionary (separate window, with the Settings tab)
 - View Log File
-- All feature toggles (Mode, Two-Pass, Screen Context, LLM Cleanup, etc.)
+- All feature toggles (Sticky COMMAND mode, Two-Pass, Screen Context, LLM Cleanup, etc.)
+- Reset Position
 
 ## Where to go next
 

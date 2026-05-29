@@ -12,7 +12,7 @@ cait-whisper is **a free Windows app that types what you say**. It runs entirely
 
 ## Install (5 minutes, one time)
 
-Follow the three numbered steps in the [main README](../README.md#install-in-3-steps). Stop here when you see a small dark coin in the bottom-right corner of your screen.
+Follow the three numbered steps in the [main README](../README.md#install-in-3-steps). Stop here when you see a small dark coin at the bottom-center of your screen, just above the taskbar.
 
 Stuck on any step? Tell us where you got stuck - that's exactly the kind of feedback we need.
 
@@ -88,9 +88,9 @@ You can [open an issue on GitHub](../../issues/new) or just send the info direct
 
 ## A few things to know
 
-- **The coin lives in the bottom-right of whichever monitor your cursor is on.** Move to another screen and it follows.
+- **The coin rests at the bottom-center of whichever monitor your cursor is on, just above the taskbar.** Move to another screen and it follows. Prefer a corner? Right-click → Placement → Bottom right or Bottom left.
 - **Right-click the coin** for the full menu. **Left-click and drag** to move it to a custom spot on the current monitor.
-- **The Φ-in-circle is the brand mark.** It's quiet (dark gray) at rest and **lights up coral when something is happening** (recording, ready signal, command mode).
+- **The Φ-in-circle is the brand mark.** It's quiet (dark gray) at rest and **lights up coral when something is happening** (recording, ready signal, command mode). Hover it to see a status word (Ready, Resting, Listening, etc.).
 - **The dot may disappear from your screen** if you put your cursor over it for too long. Right-click the system tray icon (small Φ in the Windows tray) → Show Widget to bring it back.
 - **First launch takes 30-60 seconds** while the speech model loads. After that everything is instant.
 - **`cait-whisper.log` is local to your machine.** It's just a text file you can open in Notepad. Sharing it is safe - it never contains the words you dictated, just system events.

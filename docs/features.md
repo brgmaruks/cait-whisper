@@ -81,10 +81,10 @@ Design choices:
 
 ## COMMAND mode
 
-Toggle with `Shift + Alt + M` or right-click -> "Mode: PURE/COMMAND". The widget dot changes:
+For a single command, press `Shift + Alt + C` (one-shot: speak one command, then it auto-reverts to PURE). For sticky COMMAND mode, right-click -> "Sticky COMMAND mode". The widget coin changes:
 
-- **PURE** (default): filled dot `●`, gray, always idle color
-- **COMMAND**: hollow ring `◎`, bright blue
+- **PURE** (default): quiet gray Φ-in-circle on a dark coin
+- **COMMAND**: the coin fills solid coral with a dark Φ (one-shot uses the lighter coral-soft)
 
 In COMMAND mode, every utterance goes through a hybrid classifier:
 
@@ -161,10 +161,17 @@ When ON, the log file captures every decision the app makes: correction watch ar
 
 ## Audio cues
 
-Start-of-recording and end-of-transcription audio signals. Useful for confirming the app is listening when you can't see the dot.
+Start-of-recording and end-of-transcription audio signals. Useful for confirming the app is listening when you can't see the coin.
 
 - **Profiles**: subtle (default), chime, click, scifi, off
 - **Change**: right-click -> "Audio Cues" submenu. Each profile has a "Test" option.
+
+## Waveform styles
+
+While recording, the strip shows a real frequency-spectrum waveform that reacts to your voice (low tones pulse the center, higher tones flick the edges). Pick the visual idiom you prefer:
+
+- **Profiles**: Mirror bars (default), filled wave, classic bars, dots, oscilloscope, and blocks.
+- **Change**: right-click -> "Waveform" submenu. The choice persists to `config.json` as `waveform_style`.
 
 ## Hallucination guard
 
@@ -178,10 +185,15 @@ Discarded recordings show a brief "no speech" indicator on the widget.
 
 ## Hover status card
 
-Move your cursor over the widget. A small panel appears showing every feature's current state, the last transcription, and the active engine. Move the cursor away and it closes.
+Move your cursor over the coin. A card fades in with, from top to bottom:
 
-Designed for at-a-glance confirmation without hunting through right-click menus.
+- A **status pill** (top-right) with a live, color-coded word for what Cait is doing: Ready, Resting, Warming up, Listening, Transcribing, Waiting to learn, or Command mode. The Ready-vs-Resting split tells you whether the next dictation is instant or has a brief model-wake.
+- The active **engine**.
+- Every feature's state in a compact **two-column grid** (values colored by state).
+- A **Last paste** section showing the full text of your most recent dictation, wrapped over multiple lines.
 
-## Multi-monitor support
+Designed for at-a-glance confirmation without hunting through the right-click menu. Move the cursor away and it closes.
 
-The widget respects which monitor your cursor is on and stays there across display changes. Drag it anywhere. Position is saved in `config.json` and survives restarts. Right-click -> "Reset Position" returns it to the bottom-right default.
+## Placement and multi-monitor support
+
+The widget rests just above the taskbar and follows whichever monitor your cursor is on. Choose where it sits with right-click -> "Placement": **Bottom center** (default), **Bottom right**, or **Bottom left**. Left-click and drag to place it anywhere on the current monitor; that custom position is saved in `config.json` and survives restarts. Right-click -> "Reset Position" returns it to the placement default.

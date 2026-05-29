@@ -56,9 +56,9 @@ Open the cait-whisper folder you just extracted. Double-click:
 1. **`setup.bat`** - installs everything cait-whisper needs (one time, ~5 minutes the first time).
 2. **`start.bat`** - launches the app. A Windows prompt will ask for admin permission; click Yes (needed for global hotkeys).
 
-A small dark coin appears in the bottom-right corner of your screen. **Hold `Ctrl + Win`, speak, release** - your words appear wherever your cursor is.
+A small dark coin appears at the bottom-center of your screen, just above the taskbar. **Hold `Ctrl + Win`, speak, release** - your words appear wherever your cursor is.
 
-That's it. Right-click the coin to switch models, change settings, or open the History window.
+That's it. Right-click the coin to switch models, change settings, choose where it sits, or open the History window.
 
 > Something not working? See [docs/troubleshooting.md](docs/troubleshooting.md) or open an [issue](../../issues).
 
@@ -135,7 +135,7 @@ cait-whisper has two modes, toggled from the right-click menu:
 - **PURE** (default): every utterance is dictated verbatim. This is the v1.x behavior.
 - **COMMAND**: utterances are classified. Commands execute, normal speech still dictates.
 
-When COMMAND mode is on, the widget dot turns a subtle blue so you always know which mode you're in.
+Fire a single command with `Shift + Alt + C` (one-shot, auto-reverts to PURE), or turn on sticky COMMAND mode from the right-click menu. When COMMAND mode is active the coin fills solid coral so you always know which mode you're in.
 
 **Commands that work anywhere:**
 
@@ -166,10 +166,11 @@ Anything the classifier isn't confident about gets pasted as dictation, same as 
 ### Additional Features
 - **Optional LLM cleanup** - local Ollama post-processing to remove filler words and fix grammar
 - **Configurable audio cues** - subtle, chime, click, scifi, or off
-- **Customizable widget** - colors, transparency, size, border
-- **Multi-monitor** - widget follows your cursor across displays
+- **Live frequency-spectrum waveform** - reacts to your voice, with six selectable visual styles
+- **Placement** - rests just above the taskbar; choose bottom center (default), right, or left
+- **Multi-monitor** - the widget follows your cursor across displays
 - **Hallucination guard** - detects and blocks repetitive/garbage output from the model
-- **History window** - browse, search, copy, and delete past transcriptions
+- **History window** - browse, search, copy, and delete past transcriptions, plus a Settings tab
 
 ---
 
@@ -184,7 +185,7 @@ Anything the classifier isn't confident about gets pasted as dictation, same as 
 | `Shift + Alt + C` | One-shot COMMAND mode (tap, speak a command, tap, auto-reverts) |
 | `Shift + Alt + Z` | Re-paste the last transcription |
 
-**Right-click** the widget dot for the full menu: switch models, toggle LLM cleanup, toggle spoken punctuation, open history, reset position.
+**Right-click** the coin for the full menu: switch models, re-transcribe last, pick your microphone, audio cues, waveform style, placement, open History & Dictionary, toggle features (LLM cleanup, spoken punctuation, two-pass, and more), and reset position.
 
 ---
 

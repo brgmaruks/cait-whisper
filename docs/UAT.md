@@ -17,8 +17,8 @@ Structured walkthrough for every release. Each section tests one feature or fix.
 
 ## Group A: PURE mode regression check
 
-1. [ ] Widget dot appears bottom-right, filled circle `●`, gray.
-2. [ ] Log shows `startup: ASR model ready` then a green flash on the dot.
+1. [ ] Widget coin appears bottom-center, just above the taskbar: a quiet gray Φ-in-circle. While the model loads it breathes coral.
+2. [ ] Log shows `startup: ASR model ready` then a coral flash on the coin.
 3. [ ] Open Notepad, click into it.
 4. [ ] Hold `Ctrl + Win`, say "hello world", release.
 5. [ ] **Expected**: "Hello world." or similar appears in Notepad within ~1 second (Moonshine).
@@ -29,33 +29,33 @@ Structured walkthrough for every release. Each section tests one feature or fix.
 ## Group B: Hands-free mode
 
 1. [ ] Click into Notepad.
-2. [ ] Press `Ctrl + Win + Space`. Widget expands, shows ✕ and ⏺ buttons.
+2. [ ] Press `Ctrl + Win + Space`. The coin stretches into a pill showing the cancel (✕) and submit (Φ) buttons.
 3. [ ] Speak two sentences with a pause between them.
 4. [ ] Press `Ctrl + Win + Space` again to stop.
 5. [ ] **Expected**: Both sentences paste.
 
 ## Group C: Mode switching (new hotkey)
 
-1. [ ] Hover cursor over the dot for ~1 second.
-2. [ ] **Expected**: Hover card appears above-left of dot, showing Engine, Mode: PURE, all feature states.
-3. [ ] Move cursor away. Card disappears after ~250ms.
-4. [ ] Right-click the dot. Verify the menu now contains:
-    - Mode: PURE
+1. [ ] Hover cursor over the coin for ~1 second.
+2. [ ] **Expected**: Hover card appears above the coin (clamped to the same monitor), showing a status pill (top-right), Engine, a two-column grid of feature states, and a "Last paste" section.
+3. [ ] Move cursor away. Card disappears.
+4. [ ] Right-click the coin. Verify the menu contains (among others):
+    - Switch Model, Re-transcribe last, Microphone, Audio Cues, Waveform, Placement
+    - Sticky COMMAND mode: OFF
     - Two-Pass: ON (or OFF depending on config)
     - Screen Context: OFF
-    - Dev Logs: ON
     - View Log File
 5. [ ] Close the menu by clicking elsewhere.
-6. [ ] Press `Shift + Alt + C`.
-7. [ ] **Expected**: Dot changes to hollow ring `◎` with brighter blue color.
-8. [ ] Log shows `Mode switched to COMMAND`.
-9. [ ] Hover card confirms "Mode: COMMAND".
-10. [ ] Press `Shift + Alt + C` again. Dot returns to filled gray `●`.
-11. [ ] Log shows `Mode switched to PURE`.
+6. [ ] Press `Shift + Alt + C` (one-shot COMMAND).
+7. [ ] **Expected**: The coin fills coral-soft (armed). Say one command; it executes and the coin auto-reverts to the quiet gray Φ.
+8. [ ] Hover card status pill reads "Command armed" while armed.
+9. [ ] Right-click -> toggle "Sticky COMMAND mode" ON.
+10. [ ] **Expected**: The coin fills solid coral and stays. Hover card reads "Command mode".
+11. [ ] Toggle "Sticky COMMAND mode" OFF. Coin returns to the quiet gray Φ.
 
 ## Group D: Regex voice commands (no Ollama needed)
 
-Switch to COMMAND mode (`Shift + Alt + C`). Click into Notepad. Type: `the quick brown fox jumps over the lazy dog`
+Turn on **Sticky COMMAND mode** (right-click menu) so it stays active across multiple commands. Click into Notepad. Type: `the quick brown fox jumps over the lazy dog`
 
 For each:
 
@@ -73,7 +73,7 @@ For each:
 
 ## Group E: Dictation in COMMAND mode still pastes
 
-Still in COMMAND mode, click into Notepad. Say: "this is a long sentence that should be dictated normally"
+Still in sticky COMMAND mode, click into Notepad. Say: "this is a long sentence that should be dictated normally"
 
 1. [ ] **Expected**: Text pastes verbatim.
 2. [ ] Log shows a normal `Pasted` line with no `[Mode=COMMAND] classified as` preceding it, OR shows `classifier error` then falls through.
@@ -85,7 +85,7 @@ Make sure Ollama is running: `ollama list` in a terminal should list at least on
 
 1. [ ] In Notepad, type: "This is a fairly long and somewhat verbose sentence that could probably be written much more concisely with a bit of effort."
 2. [ ] Select the whole sentence with Ctrl+A.
-3. [ ] Switch to COMMAND mode if not already (`Shift + Alt + C`).
+3. [ ] Turn on Sticky COMMAND mode if not already (right-click menu).
 4. [ ] Say "shorten this".
 5. [ ] **Expected**: Within 1-3 seconds the selection gets replaced by a shorter rewrite.
 6. [ ] Log shows `[Commands] regex match (selection): rewrite_shorter` then `[Commands] executing rewrite_shorter`.
@@ -175,26 +175,28 @@ This is the one we specifically want to debug with dev logs.
 
 ## Group L: Widget appearance & discoverability
 
-1. [ ] Dot is visible bottom-right of the primary monitor.
-2. [ ] In PURE mode: filled circle `●`, gray.
-3. [ ] In COMMAND mode: hollow ring `◎`, brighter blue.
+1. [ ] Coin is visible at the bottom-center of the cursor's monitor, just above the taskbar.
+2. [ ] In PURE mode: quiet gray Φ-in-circle on a dark coin.
+3. [ ] In COMMAND mode: the coin fills solid coral with a dark Φ (one-shot armed uses the lighter coral-soft).
 4. [ ] Correction watch active: alternates between two amber shades every ~600ms (pulse).
-5. [ ] Ready toast: green flash for 2 seconds after model loads.
+5. [ ] Ready flash: coral-soft flash for ~2 seconds after the model loads.
 6. [ ] Two-pass toast: blue panel with preview, auto-dismisses after 4 seconds.
-7. [ ] Dict-learned toast: green panel with arrow between words, auto-dismisses.
-8. [ ] Hover card: gray background, shows all active feature states.
+7. [ ] Dict-learned toast: coral-soft panel with arrow between words, auto-dismisses.
+8. [ ] Hover card: status pill (top-right), engine, two-column feature grid, "Last paste" section.
+9. [ ] During recording the strip shows a live frequency-spectrum waveform that reacts to your voice. While silent it rests flat (no phantom bloom).
+10. [ ] Placement: right-click -> Placement -> Bottom right / Bottom left moves the coin to that anchor; the recording strip grows from there.
 
 ## Group M: Drag to reposition + survives restart
 
-1. [ ] Click and drag the dot to a new location.
+1. [ ] Click and drag the coin to a new location.
 2. [ ] Quit the app (right-click -> Quit).
 3. [ ] Relaunch via `start.bat`.
-4. [ ] **Expected**: Dot appears at the new location.
-5. [ ] Right-click -> "Reset Position" returns it to the default bottom-right.
+4. [ ] **Expected**: Coin appears at the new location.
+5. [ ] Right-click -> "Reset Position" returns it to the placement default (bottom-center, just above the taskbar).
 
 ---
 
-## Known limitations (won't be fixed in v2.4)
+## Known limitations
 
 - **Selection detection** only works in apps that expose UI Automation's TextPattern. Electron apps, terminals, and password fields report empty selection. Commands silently fall through to dictation.
 - **OCR first call** takes ~2 seconds while the ONNX model loads. Subsequent calls are fast.
@@ -214,31 +216,23 @@ This is the one we specifically want to debug with dev logs.
 
 ### Group Q: Settings tab - read-only sanity
 
-1. Right-click the widget -> "History & Dictionary".
-2. Click the new **Settings** tab (4th tab).
-3. **Expected**: Tab loads with current config visible:
-   - LLM Provider: Local Ollama selected (or whatever you set)
-   - Base URL: empty (default)
-   - Model: `llama3.2:3b` (or whatever's in `ollama_model`)
-   - API Key: empty, masked with `*`
-   - ASR Engine section shows current engine + model + Two-Pass status
-   - Features section lists every feature with ON/OFF
-4. Click **Show** next to API Key field. Field becomes plaintext. Click **Hide** again.
+1. Right-click the coin -> "History & Dictionary".
+2. Click the **Settings** tab.
+3. **Expected**: Tab loads with the brand lockup and an "LLM Providers" section showing one or more **profile cards**. The active profile is marked. Each card shows its label, type, base URL, model, and a masked API key.
+4. **Expected**: An "ASR Engine" section shows the current engine + model, and a "Features" section lists every feature with its state.
+5. Expand a profile card; the API key field is masked. Reveal/hide it and confirm it toggles.
 
-### Group R: Settings tab - switch to remote provider
+### Group R: Settings tab - add a remote provider profile
 
 Requires an OpenAI-compatible API key (Z.AI, Groq, or OpenAI account).
 
-1. In the Settings tab, click "OpenAI-compatible" radio.
-2. Fill in:
-   - Base URL: e.g. `https://api.groq.com/openai/v1` or `https://api.z.ai/v1`
-   - Model: e.g. `llama-3.3-70b-versatile` or `glm-4-flash`
-   - API Key: your key
-3. Click **Test connection**.
-4. **Expected**: Status shows "Testing..." for a moment, then "OK. Response: 'OK.'" (or similar) in green.
-5. Click **Save**. Status shows "Saved." in green.
-6. Open `cait-whisper.log`. Search for `llm_api_key`.
-7. **Expected**: You see `llm_api_key = '*** (set, N chars)'` - NOT the actual key.
+1. In the Settings tab, choose a provider from the **"Add from preset"** dropdown (e.g. Groq or Z.AI) and click **Add profile**. A new card appears pre-filled with that provider's base URL and a default model.
+2. Fill in your **API key** (and adjust the model if you like).
+3. Click **Test connection** on that card.
+4. **Expected**: Status shows progress, then a success message verbatim from the provider (or a clear error with the exception type if it fails).
+5. Set the profile **active**, then click **Save**.
+6. Open `cait-whisper.log`. Search for the key name.
+7. **Expected**: The key is redacted (e.g. `*** (set, N chars)`) - NOT the actual key.
 
 ### Group S: Remote provider in action
 
@@ -252,21 +246,20 @@ After completing Group R successfully:
 
 ### Group T: Refusal of empty Base URL
 
-1. In Settings tab, switch to OpenAI-compatible.
-2. Clear the Base URL field.
-3. Click **Save**.
-4. **Expected**: Status shows "OpenAI-compatible needs a Base URL. Refusing to save with empty URL." in red. Save does not proceed.
+1. In the Settings tab, on an OpenAI-compatible profile card, clear the Base URL field.
+2. Click **Save**.
+3. **Expected**: A clear error explains an OpenAI-compatible profile needs a Base URL, and the save does not proceed.
 
 ### Group U: Backward compatibility - existing config still works
 
-1. Switch back to "Local Ollama" in Settings tab. Save.
+1. Set the active profile back to "Local Ollama". Save.
 2. Quit and relaunch the app.
-3. **Expected**: All v2.4 features work identically. No errors at startup.
+3. **Expected**: All prior features work identically. No errors at startup.
 4. Log line at startup: `per-monitor V2 DPI awareness enabled` (or similar).
 
-### Group V: Local Ollama no longer auto-starts when provider is remote
+### Group V: Local Ollama no longer auto-starts when the active profile is remote
 
-1. Set provider to OpenAI-compatible. Save.
+1. Set the active profile to an OpenAI-compatible one. Save.
 2. Make sure Ollama is NOT running on your machine (kill any `ollama serve` process).
 3. Toggle LLM Cleanup: ON in the right-click menu.
 4. **Expected**: cait-whisper does NOT spawn an Ollama subprocess (check Task Manager).

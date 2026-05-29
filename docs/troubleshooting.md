@@ -44,7 +44,7 @@ Common failure modes:
 
 ## Voice commands don't fire
 
-- **PURE mode is on**. Press `Shift + Alt + M` to switch to COMMAND mode. The dot should turn into a blue ring.
+- **PURE mode is on**. Press `Shift + Alt + C` for a one-shot command, or turn on Sticky COMMAND mode from the right-click menu. In COMMAND mode the coin fills solid coral.
 - **Classifier below confidence threshold**: the LLM fallback returned < 0.7 confidence. Happens when the utterance is ambiguous. Try a canonical phrase from the [features](features.md) list.
 - **Ollama isn't running**: selection-based and screen-context commands silently fall back to dictation if Ollama is offline. Check with `ollama list` in a terminal.
 
@@ -55,7 +55,7 @@ Common failure modes:
 
 ## "Screen Context: ON" doesn't seem to do anything
 
-- It only activates in COMMAND mode. Switch with `Shift + Alt + M`.
+- It only activates in COMMAND mode. Use `Shift + Alt + C` (one-shot) or turn on Sticky COMMAND mode from the right-click menu.
 - The first OCR call takes 2+ seconds while RapidOCR loads its ONNX model. Subsequent calls are fast.
 - Dev Logs will show `[ScreenContext] captured NNN chars in X.XXs`. If this line is missing, RapidOCR didn't load. Make sure `rapidocr-onnxruntime` is installed: `venv\Scripts\pip install rapidocr-onnxruntime`.
 

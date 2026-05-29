@@ -52,7 +52,7 @@ Yes, but be aware: when the mic is being used by your call app, some systems giv
 
 **What if I accidentally enable COMMAND mode in the middle of a sentence?**
 
-The worst that happens is short dictated phrases might get interpreted as commands. Press `Shift + Alt + M` to switch back to PURE mode. If a command fired that you didn't want, "undo that" (or Ctrl+Z manually) usually fixes it.
+The worst that happens is short dictated phrases might get interpreted as commands. One-shot COMMAND (`Shift + Alt + C`) reverts on its own after a single utterance; if you turned on Sticky COMMAND mode, toggle it back off from the right-click menu. If a command fired that you didn't want, "undo that" (or Ctrl+Z manually) usually fixes it.
 
 **Why are some commands regex-matched and others LLM-classified?**
 

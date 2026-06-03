@@ -170,7 +170,7 @@ Start-of-recording and end-of-transcription audio signals. Useful for confirming
 
 While recording, the strip shows a real frequency-spectrum waveform that reacts to your voice (low tones pulse the center, higher tones flick the edges). Pick the visual idiom you prefer:
 
-- **Profiles**: Mirror bars (default), filled wave, classic bars, dots, oscilloscope, and blocks.
+- **Profiles**: Wave (filled) (default), mirror bars, classic bars, dots, oscilloscope, and blocks.
 - **Change**: right-click -> "Waveform" submenu. The choice persists to `config.json` as `waveform_style`.
 
 ## Hallucination guard

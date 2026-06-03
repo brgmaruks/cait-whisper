@@ -39,20 +39,26 @@ MUSTARD        = "#e9b94a"   # Reserved for "watching" / correction-watch pulse
 MUSTARD_SOFT   = "#fbd87a"   # Brighter beat for the watch-pulse animation
 OLIVE          = "#6e7448"   # Quiet third accent. Low-priority toasts.
 
-# State signals (kept distinct from brand jewelry)
-# Green is intentionally NOT in the brand palette - we use coral-soft for
-# success-style flashes instead to stay on brand.
+# State signals — all mapped to brand palette tokens. No invented hex.
+#
+# DANGER: coral at full strength is the attention colour; errors use it
+#   with appropriate copy ("Error:", "Failed:") rather than a separate red.
+#   This keeps the palette clean and reads naturally — coral IS the signal.
+#
+# INFO: mustard is the brand's jewelry / special-signal colour ("watching",
+#   stat ring highlights). The two-pass "better version available" toast is a
+#   quiet reward notification — exactly the jewelry use case.
 SUCCESS        = CORAL_SOFT  # "model ready" pulse, dict-learned flash
-DANGER         = "#d16a4c"   # Errors. Within coral family but harsher.
+DANGER         = CORAL       # Errors — full-strength coral as the attention signal
 WARNING        = MUSTARD     # Pending state, correction-watch
-INFO           = "#8fa3c9"   # Two-pass "better version available" - cool, non-brand
+INFO           = MUSTARD_SOFT  # Two-pass "better version available" - quiet jewelry
 
 # ─── Aliased legacy names ────────────────────────────────────────────────
 # Older code imports BG / FG / FG_DIM / etc. Keep these as aliases so we
 # don't have to grep-and-replace every reference.
 BG             = INK
 BG_ELEVATED    = INK_SOFT
-BG_SUBTLE      = "#1c1a14"
+BG_SUBTLE      = INK_SOFT  # was "#1c1a14" — map to nearest named token
 FG             = PAPER
 FG_MUTED       = INK_FAINT
 FG_DIM         = INK_MUTE
@@ -185,32 +191,113 @@ def coral_period(parent, font=None):
     )
 
 
+def render_cait_wordmark_image(size_pt: int, fg_hex: str = None,
+                               bg_hex: str = None,
+                               supersample: int = 3):
+    """Render the 'Cait' portion of the wordmark as a PIL RGBA Image with
+    the spec-correct Φ-as-tittle-of-i treatment.
+
+    The Atelier Zero spec states: "The same Φ appears as the tittle of the i
+    in the Cait wordmark. Italic in the wordmark, upright in the logo mark."
+
+    Tkinter labels cannot replace individual glyph components, so we use PIL:
+      1. Draw "Ca" + dotless-i (U+0131) + "t" in bold italic sans
+      2. Measure the exact bounding box of the dotless-i
+      3. Draw a coral Φ sized to sit precisely where the tittle would be,
+         italic to match the wordmark context
+
+    Args:
+        size_pt:    approximate point size (72dpi equivalent in PIL px)
+        fg_hex:     text color (defaults to PAPER)
+        bg_hex:     background fill (defaults to INK — pass None for transparent)
+        supersample: render at Nx then LANCZOS downsample for AA
+    """
+    from PIL import Image, ImageDraw
+
+    fg = fg_hex or PAPER
+    px = int(size_pt * 1.33 * supersample)   # pt -> px at 72dpi, supersampled
+
+    font_bold = _load_bold_font(px)
+
+    # Step 1: measure "CaIt" (capital I as stand-in) to get overall dimensions
+    tmp = Image.new("RGBA", (1, 1), (0, 0, 0, 0))
+    d = ImageDraw.Draw(tmp)
+
+    # Use dotless-i (U+0131) so there is literally no tittle to compete with
+    word = "Caıt"
+    try:
+        bbox_full = d.textbbox((0, 0), word, font=font_bold)
+        w = bbox_full[2] - bbox_full[0] + px // 4   # add some right margin
+        h = bbox_full[3] - bbox_full[1] + px // 4
+    except Exception:
+        w = h = px * 3
+
+    # Step 2: render on the real canvas
+    bg_tuple = _hex_to_rgba(bg_hex) if bg_hex else (0, 0, 0, 0)
+    img = Image.new("RGBA", (w, h), bg_tuple)
+    d = ImageDraw.Draw(img)
+
+    try:
+        # Draw "Ca" + dotless-i + "t"
+        d.text((0, 0), word, fill=fg, font=font_bold)
+
+        # Step 3: find the dotless-i bounding box by comparing where "Ca" ends
+        bbox_ca = d.textbbox((0, 0), "Ca", font=font_bold)
+        x_i = bbox_ca[2] - bbox_ca[0]
+        bbox_i = d.textbbox((0, 0), "ı", font=font_bold)
+        i_w = bbox_i[2] - bbox_i[0]
+        i_h = bbox_i[3] - bbox_i[1]
+
+        # Tittle zone: horizontally centered on the i, vertically above it
+        tittle_h = max(4, int(i_h * 0.28))        # tittle is ~28% of i height
+        tittle_x = x_i + (i_w // 2)
+        tittle_y = max(0, bbox_i[1] - int(tittle_h * 0.8))
+
+        # Draw coral Φ at tittle size — italic to match wordmark context
+        phi_font = _load_bold_font(tittle_h + int(px * 0.10))
+        try:
+            pb = d.textbbox((0, 0), "Φ", font=phi_font)
+            pw = pb[2] - pb[0]
+            ph = pb[3] - pb[1]
+            d.text((tittle_x - pw // 2, tittle_y - ph // 2),
+                   "Φ", fill=CORAL, font=phi_font)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    return img.resize(
+        (max(1, w // supersample), max(1, h // supersample)),
+        Image.LANCZOS,
+    )
+
+
+def _hex_to_rgba(hex_str: str) -> tuple:
+    """Convert a #RRGGBB hex string to an (R, G, B, 255) tuple."""
+    h = hex_str.lstrip("#")
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), 255)
+
+
 def brand_lockup(parent, *, bg=None, fg=None,
                  cait_size: int = 14, period_size: int = 16,
                  whisper_size: int = 14):
     """The full 'Cait. whisper' brand lockup as a packed Frame.
 
-    Composes three labels in a horizontal row:
-        Cait     - BOLD, brand sans (Inter Tight / Segoe UI fallback)
-        .        - CORAL, italic brand serif, slightly larger
-        whisper  - italic, brand serif, same color as Cait
+    Spec-correct composition (Atelier Zero):
+        Cait    - bold sans (Inter Tight), with Φ as the tittle of the i
+                  rendered via PIL so the spec typographic rule is honored
+                  at every size
+        .       - CORAL, italic brand serif, slightly larger (the accent)
+        whisper - italic, brand serif, same color as Cait
 
-    The lockup is the canonical product wordmark. Use it anywhere the
-    product needs to identify itself: hover card, settings header,
-    history window title bar.
-
-    Args:
-        parent:       parent widget
-        bg:           background color; defaults to parent's bg if available
-        fg:           color for "Cait" and "whisper" (default PAPER)
-        cait_size:    point size for "Cait" (default 14)
-        period_size:  point size for "." (slightly larger reads as accent)
-        whisper_size: point size for "whisper"
+    The Φ-as-tittle rule: "italic in wordmark, upright in logo mark." The
+    PIL render uses italic positioning. The logo mark Φ is drawn upright.
 
     Returns:
         tk.Frame - pack it as you would a single label.
     """
     import tkinter as tk
+    from PIL import ImageTk
     if bg is None:
         try:
             bg = parent.cget("bg")
@@ -220,9 +307,23 @@ def brand_lockup(parent, *, bg=None, fg=None,
         fg = PAPER
 
     container = tk.Frame(parent, bg=bg)
-    tk.Label(container, text="Cait", bg=bg, fg=fg,
-             font=(FONT_FAMILY_TIGHT, cait_size, "bold"),
-             padx=0, pady=0).pack(side="left")
+
+    # PIL-rendered "Cait" with spec Φ-as-tittle
+    try:
+        pil_cait = render_cait_wordmark_image(
+            cait_size, fg_hex=fg, bg_hex=bg,
+        )
+        photo = ImageTk.PhotoImage(pil_cait)
+        lbl = tk.Label(container, image=photo, bg=bg,
+                       borderwidth=0, highlightthickness=0)
+        lbl._photo = photo   # keep alive
+        lbl.pack(side="left", padx=(0, 0))
+    except Exception:
+        # Fallback to plain text if PIL composite fails
+        tk.Label(container, text="Cait", bg=bg, fg=fg,
+                 font=(FONT_FAMILY_TIGHT, cait_size, "bold"),
+                 padx=0, pady=0).pack(side="left")
+
     tk.Label(container, text=".", bg=bg, fg=CORAL,
              font=(FONT_FAMILY_ITALIC, period_size, "italic", "bold"),
              padx=0, pady=0).pack(side="left")

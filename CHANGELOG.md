@@ -2,6 +2,64 @@
 
 All notable changes to cait-whisper will be documented in this file.
 
+## [2.6.0] - 2026-05-29
+
+Headline: cait-whisper is now a **click-to-run download** - no Python, no
+setup. Plus a startup splash, a unified launcher, and a pass to bring the UI
+into line with the published Cait (Atelier Zero) brand standard.
+
+### Added
+- **Prebuilt Windows download** (`cait-whisper-windows.zip`, ~255 MB). One
+  file, `Cait Whisper.exe`, that users double-click first run and every run.
+  Built with PyInstaller (`cait-whisper.spec` + `build.bat`). No Python, no
+  pip, no PATH. Validated end-to-end: launch, elevate, config bootstrap,
+  model download, ready, and the History-window subprocess dispatch.
+- **`cw_paths.py`** - resolves user-data paths correctly for both source and
+  frozen builds (writes next to the .exe when frozen, repo dir from source).
+- **`cait_whisper.py`** - frozen-bundle entry that dispatches the widget vs
+  the `--history-window` process.
+- **Startup splash** (`splash.py`) - a centered brand card while the model
+  loads: the Phi-in-circle backdrop, seven bouncing coral stars (Vogel
+  phyllotaxis, central star deeper coral), the "Cait. whisper" lockup, and a
+  filled coral loading wave (the app's default waveform). Most valuable on
+  first-run model download.
+- **Unified launchers**: `Cait Whisper.bat` (source - sets up if needed, then
+  runs, first run and every run) and a branded Desktop shortcut generator
+  (`Create Launcher.bat` / `make_launcher.ps1`) with the Phi icon, no console
+  window, run-as-admin.
+- **Config bootstrap**: first run seeds `config.json` from the bundled
+  example, so the frozen app needs no setup.bat.
+- **Taskbar branding**: both processes set an explicit AppUserModelID so
+  windows group under "Cait Whisper" with the Phi icon, not "python".
+
+### Changed
+- **Default engine is now Whisper `distil-small.en`** (was Moonshine base) -
+  better accuracy, ~200 MB, fast first-run download. Moonshine remains one
+  click away in Switch Model; two-pass auto-engages if you switch to it.
+- **Default waveform is now Wave (filled)** (was mirror bars).
+- **Wordmark now honors the brand spec**: the "Cait" lockup renders with a
+  coral Phi as the tittle of the i (PIL composite), italic in the wordmark
+  vs upright in the logo mark. Applied everywhere the lockup appears.
+- **History/Settings window widened** (640 -> 760) and the settings body now
+  tracks the window width, so the Settings tab fits without stretching.
+- **Coral discipline** (brand cap of ~2 coral elements per screen): secondary
+  buttons (Add entry, Add profile, Promote) are now ghost/outline style;
+  only the primary Save action keeps a filled-coral CTA.
+
+### Fixed (brand-standard conformance)
+- **Removed invented hex values** `#d16a4c` (DANGER) and `#8fa3c9` (INFO),
+  which were outside the brand palette. DANGER now maps to CORAL (errors use
+  the attention colour + clear copy), INFO to MUSTARD_SOFT (quiet jewelry).
+  BG_SUBTLE mapped to INK_SOFT.
+- **Removed pure black** (`#000`) from buttons - the spec forbids pure black;
+  now uses INK.
+
+### Notes
+- The Phi-in-circle widget mark is kept as the intentional desktop adaptation
+  of the full website constellation mark (7 stars + bloom + golden ring don't
+  survive at a 32px coin). The mark's heart - the circle, ring, and Phi - is
+  preserved.
+
 ## [2.5.6] - 2026-05-29
 
 Widget motion + placement polish. A pass focused entirely on how the floating

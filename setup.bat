@@ -92,7 +92,7 @@ echo.
 echo        Core packages installed.
 echo.
 
-:: ── Optional: Parakeet / NeMo — blocked on Python 3.12+ ──────────────────────
+:: ── Optional: Parakeet / NeMo - blocked on Python 3.12+ ──────────────────────
 echo  [3/4] Parakeet (NVIDIA NeMo) - checking Python compatibility...
 echo.
 
@@ -219,10 +219,18 @@ if not exist config.json (
 echo.
 
 :: ── Done ──────────────────────────────────────────────────────────────────────
+:: When launched via "Cait Whisper.bat" (CW_CHAINED set), skip the prompt and
+:: pause - the launcher goes straight on to start the app.
+if defined CW_CHAINED (
+    echo  Setup complete. Starting Cait Whisper...
+    echo.
+    goto :eof
+)
+
 echo  ================================================
 echo   Setup complete!
 echo.
-echo   Run start.bat to begin dictating.
+echo   Double-click "Cait Whisper" to begin dictating.
 echo.
 echo   Hotkeys:
 echo     Ctrl + Win  (hold)       hold-to-talk

@@ -1,7 +1,7 @@
 {
-    "engine": "moonshine",
+    "engine": "whisper",
     "moonshine_model": "moonshine/base",
-    "whisper_model": "large-v3-turbo",
+    "whisper_model": "distil-small.en",
     "parakeet_model": "nvidia/parakeet-tdt-0.6b-v2",
     "sample_rate": 16000,
     "channels": 1,
@@ -29,7 +29,7 @@
         "idle_size":           32
     },
     "audio_cue": "subtle",
-    "waveform_style": "bars_mirror",
+    "waveform_style": "wave_filled",
     "spoken_punctuation": true,
     "command_mode": false,
     "auto_learn": true,

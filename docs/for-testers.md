@@ -12,7 +12,7 @@ cait-whisper is **a free Windows app that types what you say**. It runs entirely
 
 ## Install (5 minutes, one time)
 
-Follow the three numbered steps in the [main README](../README.md#install-in-3-steps). Stop here when you see a small dark coin at the bottom-center of your screen, just above the taskbar.
+Follow the **easy install** in the [main README](../README.md#install): download the zip from Releases, extract it, and double-click `cait-whisper`. Stop here when you see a small dark coin at the bottom-center of your screen, just above the taskbar.
 
 Stuck on any step? Tell us where you got stuck - that's exactly the kind of feedback we need.
 

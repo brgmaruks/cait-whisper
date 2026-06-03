@@ -10,7 +10,7 @@ There is no telemetry, no analytics, no account.
 
 **Which ASR engine should I use?**
 
-For most users: Moonshine (base) is the default because it's fastest and good enough. With two-pass transcription enabled (v2.1+), Whisper runs in the background and offers a better transcription whenever Moonshine gets it wrong, so you don't have to choose.
+For most users: Whisper `distil-small.en` is the default - a strong accuracy/speed balance that downloads fast (~200 MB). If you switch your primary engine to Moonshine (faster, lighter), two-pass transcription kicks in automatically: Whisper runs in the background and offers a better transcription whenever Moonshine gets it wrong, so you don't have to choose.
 
 For English-only perfectionists: Parakeet is the most accurate but needs Python 3.10 or 3.11 specifically.
 

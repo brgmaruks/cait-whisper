@@ -33,12 +33,14 @@ from pathlib import Path
 # Brand tokens (palette, type, spacing, brand-mark drawing helpers).
 # Imports cleanly with no Tk dependency; font resolution upgrades happen
 # in main() after the Tk root exists.
+import cw_paths
+import splash as _splash_mod
 import theme
 
 # ─── Early crash handler ──────────────────────────────────────────────────────
 # Runs before logging is configured, so we write directly to the log file
 # and show a GUI dialog (no console when launched via pythonw).
-_LOG_PATH_EARLY = Path(__file__).parent / "cait-whisper.log"
+_LOG_PATH_EARLY = cw_paths.app_dir() / "cait-whisper.log"
 
 def _fatal(message: str, exc: Exception = None):
     """Show a GUI error dialog and write to log, then exit."""
@@ -75,7 +77,7 @@ except ImportError as e:
     _fatal(f"Missing package: {e}", e)
 
 # ─── Logging — console + rotating log file ────────────────────────────────────
-_LOG_PATH = Path(__file__).parent / "cait-whisper.log"
+_LOG_PATH = cw_paths.app_dir() / "cait-whisper.log"
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -89,13 +91,13 @@ logging.basicConfig(
 log = logging.getLogger("cait-whisper")
 
 # ─── Load config ──────────────────────────────────────────────────────────────
-CONFIG_PATH = Path(__file__).parent / "config.json"
+CONFIG_PATH = cw_paths.app_dir() / "config.json"
 
 # Brand assets live in assets/. The .ico is generated on first launch if
 # missing (theme.ensure_brand_ico is idempotent), so a fresh clone without
 # the committed file still gets one. The history window points at the same
 # path so taskbar/Alt-Tab/title bar all show the Φ-in-circle.
-ASSETS_DIR = Path(__file__).parent / "assets"
+ASSETS_DIR = cw_paths.app_dir() / "assets"
 ICO_PATH = ASSETS_DIR / "cait.ico"
 try:
     ASSETS_DIR.mkdir(exist_ok=True)
@@ -105,7 +107,20 @@ except Exception as _e:
 
 def load_config():
     if not CONFIG_PATH.exists():
-        _fatal("config.json not found. Please run setup.bat first.")
+        # First run: seed config.json from the bundled example. The frozen
+        # download has no setup.bat to do this; from source it's a friendly
+        # fallback if the user skipped setup.bat.
+        example = cw_paths.resource_path("config.example.json")
+        try:
+            if example.exists():
+                CONFIG_PATH.write_text(example.read_text(encoding="utf-8"),
+                                       encoding="utf-8")
+                log.info(f"config.json not found; seeded from {example}")
+            else:
+                _fatal("config.json not found and no config.example.json to "
+                       "seed from. Please reinstall.")
+        except Exception as e:
+            _fatal(f"Could not create config.json: {e}", e)
     try:
         with open(CONFIG_PATH) as f:
             data = json.load(f)
@@ -155,7 +170,7 @@ WAVEFORM_STYLES = (
     ("line_oscilloscope", "Oscilloscope"),
     ("blocks_brutalist",  "Blocks"),
 )
-WAVEFORM_STYLE = cfg.get("waveform_style", "bars_mirror")
+WAVEFORM_STYLE = cfg.get("waveform_style", "wave_filled")
 
 # Spoken punctuation — replace words like "period" / "new line" with symbols.
 # Toggled via right-click menu or config.json "spoken_punctuation": true/false.
@@ -260,8 +275,8 @@ def _save_config_keys(updates: dict):
 
 # ─── History & Dictionary ─────────────────────────────────────────────────────
 
-_HISTORY_PATH = Path(__file__).parent / "history.json"
-_DICT_PATH    = Path(__file__).parent / "dictionary.json"
+_HISTORY_PATH = cw_paths.app_dir() / "history.json"
+_DICT_PATH    = cw_paths.app_dir() / "dictionary.json"
 _MAX_HISTORY  = 50
 
 _history:    list[dict] = []   # [{"text": "...", "ts": "2026-03-24 10:00", "engine": "whisper"}]
@@ -269,7 +284,7 @@ _dictionary: dict[str, str] = {}  # {"kate": "CAIT", "llm": "LLM", ...}
 _last_transcription: str = ""   # used by Alt+Shift+Z re-paste
 
 # ── Auto-dictionary correction state ─────────────────────────────────────────
-_PENDING_PATH = Path(__file__).parent / "pending_corrections.json"
+_PENDING_PATH = cw_paths.app_dir() / "pending_corrections.json"
 _CONFIDENCE_THRESHOLD = 2   # need N identical corrections before auto-learning
 _correction_original: str = ""    # the raw text that was just pasted
 _correction_active: bool = False  # True while we're watching for a correction
@@ -3441,11 +3456,13 @@ def _open_history_window():
         # Already running — nothing to do
         log.info("[HistoryWindow] already running (pid %d)", _history_proc.pid)
         return
-    script = str(Path(__file__).parent / "history_window.py")
-    _history_proc = subprocess.Popen(
-        [sys.executable, script],
-        cwd=str(Path(__file__).parent),
-    )
+    if cw_paths.is_frozen():
+        # Frozen: no .py on disk to run. Re-launch our own exe with a flag
+        # that the bundle entry (cait_whisper.py) routes to the history window.
+        cmd = [sys.executable, "--history-window"]
+    else:
+        cmd = [sys.executable, str(cw_paths.app_dir() / "history_window.py")]
+    _history_proc = subprocess.Popen(cmd, cwd=str(cw_paths.app_dir()))
     log.info("[HistoryWindow] launched as pid %d", _history_proc.pid)
 
 
@@ -3463,6 +3480,7 @@ def _open_log_file():
 _widget: StatusWidget = None
 _tray   = None          # pystray.Icon — set in main()
 _stream = None          # sd.InputStream — set in main()
+_splash = None          # splash.SplashScreen — shown during startup model load
 
 _recording    = False
 _processing   = False   # True while _transcribe_and_paste is running
@@ -4502,6 +4520,14 @@ def main():
     except Exception as e:
         log.debug(f"startup: DPI awareness unavailable ({e}); continuing")
 
+    # Brand the taskbar: declare a distinct AppUserModelID so any window we
+    # show uses our icon and groups under "Cait Whisper" instead of generic
+    # "python"/"pythonw". Set before any window is created.
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Cait.Whisper")
+    except Exception:
+        pass
+
     log.info("startup: loading history and dictionary")
     _load_history()
     _load_dictionary()
@@ -4513,8 +4539,34 @@ def main():
     # brand-preferred families (Inter, Inter Tight, etc.) are installed.
     # Idempotent and silent if not.
     theme.resolve_fonts()
-    _widget.set_state("loading")   # indigo pulse while model loads
     log.info("startup: widget visible")
+
+    # ── Startup splash ────────────────────────────────────────────────────────
+    # A centered brand splash while the model loads. The coin stays quiet
+    # (idle) in the corner so there aren't two loading animations; the splash
+    # owns the "we're warming up" moment. Most valuable on first launch, when
+    # the model is downloaded (~a minute) and the user needs reassurance.
+    # finish() is guaranteed: on ready, on error, and via a safety timeout.
+    global _splash
+    try:
+        _splash = _splash_mod.SplashScreen(_widget.root)
+        _splash.set_status("Preparing speech model...")
+    except Exception as e:
+        _splash = None
+        log.debug(f"startup: splash unavailable ({e}); continuing")
+
+    def _close_splash():
+        global _splash
+        if _splash is not None:
+            try:
+                _splash.finish()
+            except Exception:
+                pass
+            _splash = None
+
+    # Safety net: never let the splash trap the user, even if the model load
+    # hangs or the connection is slow. The coin (quiet idle) is already there.
+    _widget.root.after(120_000, _close_splash)
 
     # ── System tray icon ──────────────────────────────────────────────────────
     log.info("startup: setting up tray icon")
@@ -4662,12 +4714,15 @@ def main():
                 _asr_model = loaded
             log.info("startup: ASR model ready")
         except Exception as e:
+            # Close the splash before the fatal dialog so it doesn't linger.
+            _ui_after(0, _close_splash)
             _ui_after(0, lambda: _fatal(f"Failed to load ASR model: {e}", e))
             return
         # Transition to idle and play the ready beeps — all on the main thread
         def _on_ready():
+            _close_splash()                  # splash done; coin takes over
             _widget.set_state("idle")
-            # Green flash on idle dot for 2 s — subtle "model is ready" signal
+            # Coral flash on the coin for 2 s — subtle "model is ready" signal
             _ui_after(100, _widget._show_ready_toast)
             def _beeps():
                 _play_cue("done")

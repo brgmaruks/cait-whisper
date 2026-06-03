@@ -5,6 +5,12 @@ __pycache__/
 *.pyd
 .Python
 
+# PyInstaller build artifacts (the distributable is uploaded to Releases,
+# not committed). The .spec and build.bat ARE tracked.
+build/
+dist/
+*.manifest
+
 # Virtual environment — each user runs setup.bat to create their own
 venv/
 env/

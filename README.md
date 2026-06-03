@@ -36,29 +36,32 @@
 
 ---
 
-## Install in 3 steps
+## Install
 
 Made for Windows 10 or 11. No terminal experience needed.
 
-### 1. Install Python
-Download from [python.org/downloads](https://www.python.org/downloads/) and run the installer. **On the first screen, tick the box that says "Add python.exe to PATH"** before clicking Install. (If you forget, just re-run the installer and choose Modify.)
+### The easy way (recommended)
 
-> Already have Python 3.10 or newer? Skip this step.
+1. Go to the **[Releases page](../../releases/latest)** and download **`cait-whisper-windows.zip`**.
+2. **Right-click the zip → Extract All** to a folder like your Desktop.
+3. Open the folder and double-click **`Cait Whisper`**. (This is the only thing you ever click - first time and every time after.)
+   - The first time, Windows may say "Windows protected your PC" (because the app isn't code-signed yet). Click **More info → Run anyway**. It's safe.
+   - Click **Yes** on the permission prompt (needed so the keyboard shortcut works everywhere).
 
-### 2. Download cait-whisper
-Click the green **Code** button at the top of this page, then **Download ZIP**. Extract the zip somewhere convenient like `C:\cait-whisper\`.
+A startup splash appears while the speech model loads, then a small coral coin settles at the bottom-center of your screen, just above the taskbar. The first launch downloads the model (needs internet, about a minute); after that it's instant and offline.
 
-> Prefer a Release? Grab the latest from the [Releases page](../../releases/latest) instead.
+**Hold `Ctrl + Win`, speak, release** - your words appear wherever your cursor is. Right-click the coin to switch models, change settings, choose where it sits, or open the History window.
 
-### 3. Run setup, then run the app
-Open the cait-whisper folder you just extracted. Double-click:
+No Python, no setup, no command line. Just unzip and run.
 
-1. **`setup.bat`** - installs everything cait-whisper needs (one time, ~5 minutes the first time).
-2. **`start.bat`** - launches the app. A Windows prompt will ask for admin permission; click Yes (needed for global hotkeys).
+### The advanced way (from source)
 
-A small dark coin appears at the bottom-center of your screen, just above the taskbar. **Hold `Ctrl + Win`, speak, release** - your words appear wherever your cursor is.
+Run from source if you want the Parakeet engine, want to develop, or prefer not to use the prebuilt download. Requires **Python 3.10, 3.11, or 3.13** (tick "Add python.exe to PATH" in the installer).
 
-That's it. Right-click the coin to switch models, change settings, choose where it sits, or open the History window.
+1. Download this repo (green **Code** button → **Download ZIP**, or `git clone`) and extract it.
+2. Double-click **`Cait Whisper.bat`**. That's it - first run it sets everything up (a few minutes, one time), then launches; every run after, it just launches. One file, first run and every run.
+
+See [docs/installation.md](docs/installation.md) for the full source-install walkthrough, Ollama setup, and Parakeet. (`setup.bat` and `start.bat` are still there if you'd rather run the steps separately.)
 
 > Something not working? See [docs/troubleshooting.md](docs/troubleshooting.md) or open an [issue](../../issues).
 
@@ -316,11 +319,15 @@ The biggest opportunity right now is **macOS and Linux support** - the core logi
 
 ```
 cait-whisper/
-├── setup.bat               One-time setup (creates venv, installs deps, downloads model)
-├── start.bat               Launcher (elevates to admin, activates venv, runs the app)
+├── Cait Whisper.bat        Source one-click launcher (sets up if needed, then runs)
+├── setup.bat               Source setup (creates venv, installs deps)
+├── start.bat               Source launcher (elevates to admin, runs the app)
+├── build.bat               Builds the prebuilt download (PyInstaller -> zip)
+├── cait-whisper.spec       PyInstaller build spec
 ├── requirements.txt        Python dependencies
-├── config.example.json     Template config - copy to config.json to customize
+├── config.example.json     Template config - seeds config.json on first run
 │
+├── cait_whisper.py         Frozen-bundle entry (dispatches widget vs history window)
 ├── client.py               Main app: engines, UI, hotkeys, dictation pipeline
 ├── history_window.py       History / Dictionary / Pending / Settings window
 ├── theme.py                Brand tokens, PIL-rendered mark + glyphs, fonts
@@ -328,8 +335,10 @@ cait-whisper/
 ├── llm_provider.py         Multi-provider LLM dispatch (Ollama / OpenAI / Z.AI / Groq)
 ├── context.py              Screen-context OCR (RapidOCR)
 ├── config_io.py            Atomic config read/write with secret redaction
+├── cw_paths.py             Path resolution for source vs frozen builds
 │
 ├── assets/                 Brand assets (icon)
+├── packaging/              Files bundled into the download (READ ME FIRST)
 ├── docs/                   User and developer documentation
 │   └── economy/            $CAIT contribution ledger
 └── .github/                Issue templates, workflows, funding config

@@ -21,13 +21,26 @@ try:
 except Exception:
     pass
 
+# Brand the taskbar entry: same AppUserModelID as the main app so this window
+# shows the Phi icon and groups under "Cait Whisper", not "python". Must be
+# set before the Tk window is created.
+try:
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Cait.Whisper")
+except Exception:
+    pass
+
 try:
     import pyperclip
 except ImportError:
     pyperclip = None
 
+import cw_paths
+
 # ─── Paths ────────────────────────────────────────────────────────────────────
-_DIR          = Path(__file__).parent
+# cw_paths.app_dir() resolves to the repo dir from source and to the folder
+# containing the .exe when frozen, so this process reads/writes the same data
+# files the main widget does in both modes.
+_DIR          = cw_paths.app_dir()
 _HISTORY_PATH = _DIR / "history.json"
 _DICT_PATH    = _DIR / "dictionary.json"
 _PENDING_PATH = _DIR / "pending_corrections.json"
@@ -148,11 +161,11 @@ class HistoryDictWindow:
         # Alt-Tab show "Cait. whisper".
         self.root.title("Cait. whisper")
         self.root.resizable(True, True)
-        # v2.5.3: 540 -> 640 wide. The four tab labels (Recent transcriptions,
-        # Dictionary, Pending, Settings) PLUS the new coral glyphs need more
-        # room than 540 to lay out without crowding. Height stays at 680 with
-        # a small bump from 640 for the heavier title bar.
-        self.root.geometry("640x680")
+        # v2.5.6: 640 -> 760 wide so the Settings tab (profile cards, preset
+        # row, section blurbs) fits without the user having to stretch the
+        # window. minsize keeps it usable if dragged smaller.
+        self.root.geometry("760x700")
+        self.root.minsize(620, 520)
         self.root.configure(bg=_BG)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -161,7 +174,7 @@ class HistoryDictWindow:
         # generated on first launch by client.py via theme.ensure_brand_ico.
         try:
             from pathlib import Path
-            ico = Path(__file__).parent / "assets" / "cait.ico"
+            ico = _DIR / "assets" / "cait.ico"
             if not ico.exists():
                 theme.ensure_brand_ico(ico)
             self.root.iconbitmap(default=str(ico))
@@ -437,7 +450,9 @@ class HistoryDictWindow:
                               insertbackground=_FG,
                               font=("Segoe UI", 9), width=12, bd=0)
         self._e_to.pack(side="left", padx=4)
-        tk.Button(add_row, text="Add", bg=_ACC, fg="#000", bd=0,
+        tk.Button(add_row, text="Add", bg=_BG, fg=_FG,
+                  highlightbackground=theme.INK_MUTE, highlightthickness=1,
+                  activebackground=_EBGD, bd=0,
                   font=("Segoe UI", 8, "bold"), padx=6,
                   command=self._add_dict_entry).pack(side="left", padx=4)
 
@@ -547,8 +562,10 @@ class HistoryDictWindow:
 
             # Promote button — immediately add to dictionary
             promo_btn = tk.Button(
-                t, text="Promote", bg=_ACC, fg="#000", bd=0,
-                font=("Segoe UI", 7, "bold"), padx=4, activebackground=_ACC,
+                t, text="Promote", bg=_EBGD, fg=_FG,
+                highlightbackground=theme.INK_MUTE, highlightthickness=1,
+                activebackground=_BG, bd=0,
+                font=("Segoe UI", 7, "bold"), padx=4,
                 cursor="hand2",
                 command=(lambda k=key, h=heard, c=correct: self._promote_pending(k, h, c)),
             )
@@ -645,9 +662,14 @@ class HistoryDictWindow:
         body_canvas.config(yscrollcommand=sb.set)
         self._body_canvas = body_canvas
         body = tk.Frame(body_canvas, bg=_BG)
-        body_canvas.create_window((0, 0), window=body, anchor="nw")
+        body_window = body_canvas.create_window((0, 0), window=body, anchor="nw")
         body.bind("<Configure>",
                   lambda e: body_canvas.config(scrollregion=body_canvas.bbox("all")))
+        # Make the inner body track the canvas width so settings content
+        # (profile cards, blurbs) fills the window instead of sitting at its
+        # natural width and getting clipped.
+        body_canvas.bind("<Configure>",
+                         lambda e: body_canvas.itemconfig(body_window, width=e.width))
         # Mouse wheel scroll for the settings body
         body_canvas.bind_all("<MouseWheel>",
                              lambda e: body_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"),
@@ -677,8 +699,10 @@ class HistoryDictWindow:
         preset_menu["menu"].config(bg=_EBGD, fg=_FG, bd=0,
                                    activebackground=_ACC, activeforeground=_BG)
         preset_menu.pack(side="left", padx=(0, 8))
-        tk.Button(add_row, text="+ Add profile", bg=_ACC, fg=_BG, bd=0,
-                  font=("Segoe UI", 9, "bold"), activebackground=_ACC,
+        tk.Button(add_row, text="+ Add profile", bg=_BG, fg=_FG,
+                  highlightbackground=theme.INK_MUTE, highlightthickness=1,
+                  activebackground=_EBGD, bd=0,
+                  font=("Segoe UI", 9, "bold"),
                   cursor="hand2", padx=10, pady=3,
                   command=self._add_profile_from_preset).pack(side="left")
 
@@ -1187,6 +1211,13 @@ class HistoryDictWindow:
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
-if __name__ == "__main__":
+def main():
+    """Launch the History/Dictionary window and run its event loop.
+    Called both from the source `python history_window.py` path and from the
+    frozen bundle entry (cait_whisper.py --history-window)."""
     app = HistoryDictWindow()
     app.root.mainloop()
+
+
+if __name__ == "__main__":
+    main()

@@ -2,7 +2,25 @@
 
 cait-whisper is a Windows-only tool. It runs fully locally - no cloud, no accounts, no subscriptions.
 
-## Requirements
+There are two ways to install: the **prebuilt download** (easiest, no Python) and the **source install** (for developers and the Parakeet engine).
+
+## Easy: prebuilt download (recommended)
+
+1. Go to the [Releases page](../../releases/latest) and download **`cait-whisper-windows.zip`**.
+2. Right-click the zip → **Extract All** to a folder (your Desktop is fine).
+3. Open the folder and double-click **`Cait Whisper`**. This is the only thing you ever click - first run and every run after.
+   - First time only, Windows may show "Windows protected your PC" because the app isn't code-signed yet. Click **More info → Run anyway**.
+   - Click **Yes** on the admin prompt (needed so the global Ctrl+Win hotkey works).
+
+The first launch downloads the speech model (needs internet, about a minute). After that it's instant and offline. No Python, no setup, no command line.
+
+**Requirements**: Windows 10 or 11, a microphone, and ~1 GB of free disk space. The download ships the Moonshine and Whisper engines; Parakeet is source-install only.
+
+## Advanced: install from source
+
+Use this if you want the Parakeet engine, want to develop, or prefer not to use the prebuilt download.
+
+**Requirements**
 
 - **Windows 10 or 11**
 - **Python 3.10, 3.11, or 3.13** (Parakeet engine requires 3.10 or 3.11 specifically)
@@ -10,22 +28,26 @@ cait-whisper is a Windows-only tool. It runs fully locally - no cloud, no accoun
 - **500 MB to 2 GB of disk space** depending on which ASR engine you use
 - **Administrator rights** for global hotkey registration
 
-## Automated install (recommended)
+**One launcher (recommended)**
 
 1. Clone or download this repository to a folder of your choice.
-2. Double-click `setup.bat`.
-3. The installer will:
-   - Check that Python is installed (offers to install via winget if missing)
-   - Create a Python virtual environment in `venv/`
-   - Install all core packages from `requirements.txt`
-   - Ask whether you want to install Parakeet (NVIDIA NeMo)
-   - Ask whether you want to install Ollama for voice commands and LLM cleanup (offers to install via winget)
-   - Pull the default Ollama model if you said yes
-   - Create `config.json` from the example
+2. Double-click **`Cait Whisper.bat`**. First run, it sets everything up; every run after, it just launches. One file, first run and every run.
 
-The first launch downloads the ASR model weights (~400 MB for Moonshine base, the default). After that everything is local and cached.
+What the first run does:
+   - Checks that Python is installed (offers to install via winget if missing)
+   - Creates a Python virtual environment in `venv/`
+   - Installs all core packages from `requirements.txt`
+   - Asks whether you want Parakeet (NVIDIA NeMo) and Ollama (voice commands / LLM cleanup)
+   - Creates `config.json` from the example
+   - Then launches the app (accept the UAC prompt - needed for the global hotkey)
 
-4. Double-click `start.bat` to launch. You may see a UAC prompt; accept it.
+The first launch also downloads the ASR model weights (~200 MB for Whisper distil-small.en, the default). After that everything is local and cached.
+
+**Prefer the steps separately?** Run `setup.bat` once, then `start.bat` each time - `Cait Whisper.bat` just chains those two for you.
+
+### Building the prebuilt download (maintainers)
+
+The `cait-whisper-windows.zip` on the Releases page is produced from a source checkout with `build.bat`, which runs PyInstaller (see `cait-whisper.spec`) and zips the result. Run it from a working source install; the zip lands in `dist/`.
 
 ## Manual install
 

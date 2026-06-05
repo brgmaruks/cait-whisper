@@ -91,12 +91,61 @@ among the season's active players. Consequences:
   perfectly level field against their actual opponents. They earned less than a genesis
   player only because Season 1 had a bigger pool and fewer miners — exactly Bitcoin.
 
-### The golden-ratio payout curve *(phi spin, proposed)*
+## The Golden Distribution
 
-Within a season's pool, placement rewards are weighted by the golden ratio: each rank's
-share is **φ× (≈1.618×)** the rank below it, so the distribution tapers as a Fibonacci
-fall-off rather than winner-take-all. Top performers are richly rewarded; the long tail
-of competent players still earns. (Exact curve to be tuned in playtest.)
+The cap is a Fibonacci number — the *static* φ. The distribution is where φ does
+*work*: a season's pool is shared as a **self-similar golden cascade** that repeats the
+same golden cut at every scale (season → individual-vs-kingdom → tiers → per-player →
+within-kingdom). The payout structure is itself a golden spiral — *as above, so below*,
+the same shape the cosmology is built on.
+
+φ governs **how the pool is shared**, never **how fast it unlocks** — emission stays at
+10%-of-remaining for the 3-year horizon (a φ-based decay would burn out in under two
+years). The cascade has three levels.
+
+### Level 1 — individual vs. kingdom
+
+Each season's pool splits by the golden ratio:
+
+| Slice | Share | Goes to |
+|---|---|---|
+| Individual ladders | **61.8%** (1/φ) | Solo performance — keeps the mid-pack logging in |
+| Kingdom pools | **38.2%** (1/φ²) | Team victory — the headline collective prize |
+
+### Level 2 — Fibonacci tiers with a golden taper
+
+Players are sorted by performance and bracketed into tiers whose **populations grow by
+Fibonacci** (1, 2, 3, 5, 8, 13, 21, 34…), while each tier's **total pool decays by 1/φ**.
+The two φ-forces multiply: per-player reward falls by **φ² (≈2.618×) each tier**, and
+~90 players earn every season instead of the prize evaporating after 4th place.
+
+| Tier | Players | Tier pool | Per-player | Per-player drop |
+|---:|---:|---:|---:|---:|
+| 1 | 1 | 39.0% | 39.03% | — |
+| 2 | 2 | 24.1% | 12.06% | ÷2.62 |
+| 3 | 3 | 14.9% | 4.97% | ÷2.43 |
+| 4 | 5 | 9.2% | 1.84% | ÷2.70 |
+| 5 | 8 | 5.7% | 0.71% | ÷2.59 |
+| 6 | 13 | 3.5% | 0.27% | ÷2.63 |
+| 7 | 21 | 2.2% | 0.10% | ÷2.61 |
+| 8 | 34 | 1.3% | 0.04% | ÷2.62 |
+
+(Shares normalize over the actual active field each season. The top prize is ≈1/φ²;
+the top two tiers together ≈1/φ — the Fibonacci retracement levels, falling straight
+out of the math.)
+
+### Level 3 — within a kingdom
+
+A kingdom's 38.2% slice is distributed to its own members by the **same golden ladder**,
+on internal contribution. The structure is now self-similar top to bottom — a fractal
+of the golden ratio.
+
+### The fairness knob
+
+φ rewards excellence steeply (the top tier takes ~39%). If playtest shows that's too
+cutthroat, the tuning knob is the **decay ratio**: drop from 1/φ (0.618) to **1/√φ
+(0.786)** — the other Fibonacci retracement level — and the curve flattens while staying
+a golden constant. Even the fairness dial is golden.
 
 ---
 

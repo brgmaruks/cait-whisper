@@ -2,17 +2,22 @@
 
 import { createState } from './state.js';
 import { renderAll } from './render.js';
+import { attachEngine } from './engine.js';
 
 const state = createState();
 state.log.push({ text: '<b>The spiral unwinds.</b> Season Zero begins. Four traditions, one Monad.', cls: 'day' });
 
+const rerender = () => renderAll(state, handlers);
+
 const handlers = {
   onSelect(i) {
     state.selectedId = (state.selectedId === i) ? null : i;
-    renderAll(state, handlers);
+    rerender();
   },
-  // renderOrders + onAdvance are attached by the engine module (stage 2).
+  // renderOrders + onAdvance are attached by attachEngine below.
 };
+
+attachEngine(state, handlers, rerender);
 
 document.getElementById('advance-btn').addEventListener('click', () => {
   if (handlers.onAdvance) handlers.onAdvance();

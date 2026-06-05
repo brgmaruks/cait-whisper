@@ -1,4 +1,4 @@
-# Mythos — Tokenomics
+# Kaithos — Tokenomics
 
 **A capped, fairly-mined, golden-ratio game token. Earned by playing. Never sold for power.**
 
@@ -10,12 +10,12 @@
 
 ## The two-token firewall
 
-Mythos lives inside the CAIT ecosystem, but it does **not** share a token with it.
+Kaithos lives inside the CAIT ecosystem, but it does **not** share a token with it.
 
 | Token | Role | Scope |
 |---|---|---|
 | **$CAIT** | Governance of the wider CaitOS / cait-whisper ecosystem | Ecosystem-wide |
-| **Game token** *(working name: `$MYTH`, provisional)* | The in-game scarce asset, mined through play | Mythos only |
+| **Game token** *(working name: `$KAI`, provisional)* | The in-game scarce asset, mined through play | Kaithos only |
 
 This separation is deliberate. The game's economy can experiment, wobble, or be
 exploited in a bad season **without ever threatening the integrity of the governance
@@ -33,7 +33,7 @@ decision, made when both have proven themselves. We keep the firewall up by defa
 | Mint after genesis | **None.** No admin mint. No inflation. No levers. |
 | Premine | **Zero.** Every token is mined through play. |
 
-Bitcoin's 21,000,000 already nods to the sequence — **21 is F(8)**. Mythos makes the
+Bitcoin's 21,000,000 already nods to the sequence — **21 is F(8)**. Kaithos makes the
 golden ratio the whole identity: a supply that *is* a Fibonacci number, on a contract
 that is immutable from genesis. Anyone can verify, at any time, that circulating
 supply never exceeds the cap and that emission follows the published schedule below.
@@ -44,7 +44,7 @@ We lock it in and walk away — Bitcoin-style.
 ## Emission — 10% of the remaining supply, every season
 
 A **season is a real season**: three months, four per year, riding
-Spring → Summer → Autumn → Winter. Mythos is built to run for many years.
+Spring → Summer → Autumn → Winter. Kaithos is built to run for many years.
 
 Each season mints **10% of whatever supply remains unmined.** That single rule gives
 us everything we wanted:
@@ -156,7 +156,7 @@ There is no insider allocation at genesis. The token does **not** go live until:
 1. The **first season completes**, and
 2. **UAT passes** and the **community agrees it's time to go.**
 
-Until then, Mythos runs in **pre-token ledger mode** — the same pattern cait-whisper
+Until then, Kaithos runs in **pre-token ledger mode** — the same pattern cait-whisper
 already uses for `rewards.json`. Season 1's earnings are *recorded* on an auditable
 ledger; only when the community pulls the trigger does that ledger become claimable
 on-chain. The genesis cohort isn't granted tokens — they **earn** them by showing up
@@ -166,7 +166,7 @@ first and proving the game works.
 
 ## The circular economy — a blended, self-funding loop
 
-Mythos pays for its own prizes. Players spend on **aesthetics only**, and that spend
+Kaithos pays for its own prizes. Players spend on **aesthetics only**, and that spend
 recycles back to the community as rewards.
 
 > Players buy cosmetics → **treasury wallet** → treasury funds prize pools → prizes go
@@ -192,7 +192,7 @@ recycles back to the community as rewards.
 
 ## What touches the chain (and what doesn't)
 
-Mythos is ~95% an ordinary, fast game and ~5% on-chain — chain only where permanence
+Kaithos is ~95% an ordinary, fast game and ~5% on-chain — chain only where permanence
 and trustlessness genuinely earn their place.
 
 | On-chain | Off-chain (normal fast backend) |

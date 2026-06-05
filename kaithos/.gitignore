@@ -1,0 +1,4 @@
+node_modules/
+tools/*.png
+tools/board.svg
+.DS_Store

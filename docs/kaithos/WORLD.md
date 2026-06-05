@@ -166,22 +166,69 @@ dark.
 
 ---
 
-## The Daily Loop  **[DRAFT — active thread]**
+## The Daily Loop  **[DRAFT — numbers tunable, structure settling]**
 
-The heartbeat, and the next thing we're nailing down. Working model:
+The heartbeat. One tick = one day; all orders are committed in secret and resolve
+simultaneously at dawn. Chess by mail — your kingdom plots the night before.
 
-- At dawn the tick resolves and you receive a **budget of action-points** for the day —
-  **Fibonacci-scaled** to your development, not a real-time energy bar (so sleeping never
-  punishes you).
-- You spend the budget on **orders**: **Build · Train · Scout · Move · Strike** (and
-  diplomacy / sabotage).
-- Orders are **committed in secret** and **resolve simultaneously** for everyone on the
-  next tick. Nobody reacts in real time; everybody commits in the dark and finds out at
-  dawn. Chess by mail — your kingdom plots the night before in the group chat.
+### Action Points (AP)
 
-*Open questions:* exact action-point economy, how Move interacts with the spiral arms,
-fog-of-war rules, and how combat resolution reads the offensive triangle. **← we riff
-here next.**
+- **Each dawn** you gain AP scaled to a **Vitality** stat that grows on a Fibonacci curve
+  as your hero and town level.
+- **AP pools up to a golden ceiling** (~φ² × daily Vitality, a Fibonacci cap). You can
+  miss a day or two and bank for a bigger play — but overflow is lost, so it's a buffer,
+  not a hoard. Daily rhythm stays sacred; real life stays respected.
+- **Every order costs AP** (plus resources): **Build · Train · Scout · Move · Strike ·
+  Sabotage · Diplomacy.** Leveling raises your *tempo* — more orders per day — which is
+  the real reward of growth.
+
+### The Order of the Day
+
+Orders resolve at the tick in a fixed phase order, and the order itself is strategic:
+
+1. **Production** — resources generated, buildings finish.
+2. **Movement** — armies & spies advance along the arms (multi-tick journeys progress).
+3. **Espionage** — scouting & **sabotage resolve *before* combat** (a same-tick op can
+   soften a target you're about to hit).
+4. **Combat** — battles resolve wherever forces meet.
+5. **Dissolution** — the rim contracts (Contraction phase).
+6. **Settlement** — rankings & score update.
+
+You march *blind to where the enemy moved this tick* — that uncertainty is the game.
+
+### Movement on the arms
+
+Distance is measured in **steps along the spiral arms**. An adjacent province (index ± a
+Fibonacci number) is **1 step**; farther targets take **multiple ticks**, and armies in
+transit are **exposed** — scoutable, interceptable. Moving *inward* (toward Aether and
+survival) vs. *laterally* (to strike a neighbor) is the constant tension.
+
+### Fog of war & scouting
+
+You see your own holdings fully; neighbors show only rough size — **not their true army,
+posture, or mode.** A **Scout** reveals that, but it's a snapshot that **goes stale**, and
+defenders run **counter-espionage** (catch the spy, or feed *false* intel — feeding the
+Top Spy ladder).
+
+### Combat & the Golden Edge
+
+When you **Strike**, you commit a **mode** against the defender's posture, and the
+offensive triangle becomes a single φ rule:
+
+| Matchup | Effectiveness |
+|---|---|
+| Counter their mode | **×φ** (≈1.618) |
+| Get countered | **×1/φ** (≈0.618) |
+| Neutral | ×1 |
+
+Modes: **Martial** (Force) · **Shadow** (Subtlety) · **Arcane** (Power). So the loop
+closes: **scout their lean → pick the countering mode → multiply your force by the golden
+ratio.** Intel is literally worth φ on the battlefield. Outcome pits your
+`force × mode × hero skill` against their `defense × …`; the winner takes ground,
+resources, and ranking.
+
+*Open questions:* exact AP/Vitality curve, interception rules for armies in transit, how
+stale intel degrades, and hero-skill modifiers in the combat formula.
 
 ---
 

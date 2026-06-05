@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kaithos — Season Zero</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header id="topbar">
+      <div class="brand">
+        <span class="glyph">𝛗</span>
+        <span class="title">KAITHOS</span>
+        <span class="sub">Season Zero · MVP</span>
+      </div>
+      <div id="season-readout">
+        <span class="phase" id="phase-label">Emanation</span>
+        <span class="day">Day <b id="day-num">1</b></span>
+      </div>
+      <button id="advance-btn">Advance Day &rsaquo;</button>
+    </header>
+
+    <main id="board">
+      <section id="map-wrap">
+        <svg id="map" viewBox="0 0 900 900" preserveAspectRatio="xMidYMid meet"></svg>
+      </section>
+
+      <aside id="panel">
+        <div class="panel-block" id="hero-block"></div>
+        <div class="panel-block" id="resource-block"></div>
+        <div class="panel-block" id="selection-block">
+          <h3>The Spiral</h3>
+          <p class="muted">Select a province to see its fate. The Dissolution
+          eats inward from the rim each season — there is nowhere to hide but the center.</p>
+        </div>
+        <div class="panel-block" id="orders-block"></div>
+      </aside>
+    </main>
+
+    <footer id="log">
+      <div id="log-stream"></div>
+    </footer>
+  </div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

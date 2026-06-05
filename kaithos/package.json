@@ -1,0 +1,11 @@
+{
+  "name": "kaithos-mvp",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Kaithos — Season Zero. A golden-spiral, daily-turn strategy MVP.",
+  "scripts": {
+    "start": "python3 -m http.server 8000",
+    "serve": "python3 -m http.server 8000"
+  }
+}

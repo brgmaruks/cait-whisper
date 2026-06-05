@@ -19,19 +19,21 @@ export function createState(seed = Date.now() % 100000) {
   const provs = layout();
   const adj = adjacency(provs);
 
+  const ELEM = ['air', 'fire', 'earth', 'water'];
   const provinces = provs.map((p) => ({
     i: p.i, x: p.x, y: p.y, radius: p.radius, ring: p.ring,
     owner: null,            // faction id or null (neutral)
     garrison: 3 + Math.floor(rand() * 4),
     dev: 1,
+    element: ELEM[quadrant(p.x, p.y)], // elemental affinity, by spiral sector
     mode: pickMode(rand),   // defensive posture
     revealedBy: new Set(['neutral']),
     dissolved: false,
   }));
 
-  // The Monad / the Eye — the centre, the prize.
+  // The Monad / the Eye — the centre, the prize. Source of Aether.
   const eye = provinces[0];
-  eye.garrison = 12; eye.dev = 3; eye.isEye = true; eye.mode = 'arcane';
+  eye.garrison = 12; eye.dev = 3; eye.isEye = true; eye.mode = 'arcane'; eye.element = 'aether';
 
   // Seed the four factions on the outer rings, spread by angle.
   const ids = Object.keys(FACTIONS);
@@ -64,7 +66,8 @@ export function createState(seed = Date.now() % 100000) {
   const players = {};
   for (const id of ids) {
     players[id] = {
-      id, faction: FACTIONS[id], gold: 30, aether: 0,
+      id, faction: FACTIONS[id],
+      res: { air: 12, fire: 12, earth: 12, water: 12 }, aether: 0,
       ap: 5, apMax: 13, hero: { level: 1, xp: 0 }, alive: true,
     };
   }
@@ -83,6 +86,11 @@ export function createState(seed = Date.now() % 100000) {
 function pickMode(rand) {
   const keys = Object.keys(MODES);
   return keys[Math.floor(rand() * keys.length)];
+}
+// elemental sector of the spiral: four quarters around the Monad
+function quadrant(x, y) {
+  const a = Math.atan2(y - 450, x - 450); // [-π, π]
+  return Math.min(3, Math.floor(((a + Math.PI) / (2 * Math.PI)) * 4));
 }
 function angDiff(a, b) {
   let d = a - b;

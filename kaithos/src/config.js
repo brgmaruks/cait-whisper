@@ -29,8 +29,24 @@ export const FACTIONS = {
 };
 
 export const ORDER_COSTS = {
-  build: { ap: 1, gold: 8 },   // raise development
-  train: { ap: 1, gold: 5 },   // +army to garrison
-  scout: { ap: 1, gold: 0 },   // reveal an adjacent province
-  march: { ap: 2, gold: 0 },   // move/strike to an adjacent province
+  build: { ap: 1, earth: 8 },  // construction — stone & loam
+  train: { ap: 1, fire: 6 },   // the forge — arms & fury
+  scout: { ap: 1, air: 4 },    // the swift — messengers on the wind
+  march: { ap: 2, water: 3 },  // provisions for the road
 };
+
+// The pentagram of resources. Four ride the wheel of the year; Aether is eternal.
+export const ELEMENTS = {
+  air:    { name: 'Air',    sym: '🜁', hex: '#9ad0ec' },
+  fire:   { name: 'Fire',   sym: '🜂', hex: '#ff6b4a' },
+  earth:  { name: 'Earth',  sym: '🜃', hex: '#c39a5b' },
+  water:  { name: 'Water',  sym: '🜄', hex: '#4aa3e0' },
+  aether: { name: 'Aether', sym: '✶', hex: '#cfa8ff' },
+};
+
+// classical oppositions — an element wanes when its opposite waxes
+export const OPPOSITE = { fire: 'water', water: 'fire', air: 'earth', earth: 'air' };
+
+// Season Zero rides Summer: Fire waxes (×φ), Water wanes (×1/φ).
+export const SEASON = { name: 'Summer', waxes: 'fire', wanes: 'water' };
+

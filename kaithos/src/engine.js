@@ -1,8 +1,12 @@
 // The engine: issuing orders, the daily tick (Order of the Day), AI, and the
 // golden-edge combat that fuses the offensive triangle with φ.
 
-import { PHI, INV_PHI, MODES, ORDER_COSTS, FACTIONS, SEASON_DAYS, CONTRACTION_DAYS } from './config.js';
+import { PHI, INV_PHI, MODES, ORDER_COSTS, FACTIONS, SEASON_DAYS, CONTRACTION_DAYS, ELEMENTS, SEASON } from './config.js';
 import { isRevealed } from './state.js';
+
+const elemKeys = (cost) => Object.keys(cost).filter((k) => k !== 'ap');
+const costStr = (cost) => [`${cost.ap} AP`, ...elemKeys(cost).map((k) => `${cost[k]} ${ELEMENTS[k].sym}`)].join(' · ');
+const seasonMod = (el) => (el === SEASON.waxes ? PHI : el === SEASON.wanes ? INV_PHI : 1);
 
 const pname = (p) => (p.isEye ? 'the Eye' : 'P' + p.i);
 const fname = (id) => (id ? FACTIONS[id].name : 'Neutral');
@@ -18,9 +22,12 @@ export function attachEngine(state, handlers, rerender) {
   const log = (text, cls) => state.log.push({ text, cls });
 
   // ---- order issuing (AP + gold deducted on commit, refunded on cancel) ----
-  function canAfford(pl, cost) { return pl.ap >= cost.ap && pl.gold >= (cost.gold || 0); }
-  function pay(pl, cost) { pl.ap -= cost.ap; pl.gold -= cost.gold || 0; }
-  function refund(pl, cost) { pl.ap += cost.ap; pl.gold += cost.gold || 0; }
+  function canAfford(pl, cost) {
+    if (pl.ap < cost.ap) return false;
+    return elemKeys(cost).every((k) => (pl.res[k] || 0) >= cost[k]);
+  }
+  function pay(pl, cost) { pl.ap -= cost.ap; elemKeys(cost).forEach((k) => { pl.res[k] -= cost[k]; }); }
+  function refund(pl, cost) { pl.ap += cost.ap; elemKeys(cost).forEach((k) => { pl.res[k] += cost[k]; }); }
 
   function issue(order) {
     const me = state.players.you;
@@ -57,12 +64,12 @@ export function attachEngine(state, handlers, rerender) {
         html += `<div class="mode-row">` + Object.keys(MODES).map((m) =>
           `<button data-mode="${m}" class="${st.attackMode === m ? 'active' : ''}">${MODES[m].sym} ${MODES[m].name}</button>`).join('') + `</div>`;
         html += `<div class="stat-row"><span class="k">Troops</span><input id="troops" type="number" min="1" max="${p.garrison - 1}" value="${p.garrison - 1}" style="width:64px;background:var(--panel-2);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:.2rem .4rem"></div>`;
-        html += `<div class="muted" style="margin:.4rem 0 .25rem">to (${ORDER_COSTS.march.ap} AP):</div>`;
+        html += `<div class="muted" style="margin:.4rem 0 .25rem">to (${costStr(ORDER_COSTS.march)}):</div>`;
         for (const j of st.adj[p.i]) {
           const q = st.provinces[j]; if (q.dissolved) continue;
           const known = isRevealed(st, q);
           const tag = q.owner === 'you' ? 'reinforce' : (known ? `${fname(q.owner)} · ${q.garrison}` : `${fname(q.owner)} · ?`);
-          html += `<button class="order-btn" data-march="${j}" ${me.ap < ORDER_COSTS.march.ap ? 'disabled' : ''}><span>${q.isEye ? 'the Eye ◉' : '▸ P' + j}</span><span class="cost">${tag}</span></button>`;
+          html += `<button class="order-btn" data-march="${j}" ${!canAfford(me, ORDER_COSTS.march) ? 'disabled' : ''}><span>${q.isEye ? 'the Eye ◉' : '▸ P' + j}</span><span class="cost">${tag}</span></button>`;
         }
       }
     } else if (adjMine) {
@@ -97,9 +104,8 @@ export function attachEngine(state, handlers, rerender) {
   };
 
   function orderBtn(label, desc, cost, me, token) {
-    const dis = me.ap < cost.ap || me.gold < (cost.gold || 0);
-    const c = `${cost.ap} AP${cost.gold ? ' · ' + cost.gold + 'g' : ''}`;
-    return `<button class="order-btn" data-order="${token}" ${dis ? 'disabled' : ''}><span>${label} <span class="cost">${desc}</span></span><span class="cost">${c}</span></button>`;
+    const dis = !canAfford(me, cost);
+    return `<button class="order-btn" data-order="${token}" ${dis ? 'disabled' : ''}><span>${label} <span class="cost">${desc}</span></span><span class="cost">${costStr(cost)}</span></button>`;
   }
   function onOrderBtn(token) {
     const [kind, i] = token.split(':');
@@ -153,13 +159,16 @@ export function attachEngine(state, handlers, rerender) {
   const ownerOf = (o) => (o.owner || 'you');
 
   function produce(pl, id) {
-    let gold = 0, aether = 0;
+    let aether = 0;
     for (const p of state.provinces) {
       if (p.owner !== id || p.dissolved) continue;
-      gold += p.dev * 2;
-      if (p.ring <= 1) aether += p.dev;
+      if (p.element && pl.res[p.element] !== undefined) {
+        pl.res[p.element] += Math.round(p.dev * seasonMod(p.element)); // the wheel of the year
+      }
+      if (p.ring <= 1) aether += p.dev;            // the centre breathes Aether
     }
-    pl.gold += gold; pl.aether += aether;
+    pl.aether += aether;        // cumulative, shown in the HUD
+    pl.hero.xp += aether;       // channelled into the hero — the Power path
   }
 
   function applyBuild(o, id) {
@@ -222,31 +231,28 @@ export function attachEngine(state, handlers, rerender) {
     for (const id in state.players) {
       const pl = state.players[id];
       if (id === 'you' || !pl.alive) continue;
-      let ap = pl.ap, gold = pl.gold;
       const mine = state.provinces.filter((p) => p.owner === id && !p.dissolved);
-      // train up the strongest frontier holding
+      // grow: train the forge, raise the works
       for (const p of mine) {
-        if (ap >= 1 && gold >= 5 && p.garrison < 12 && Math.random() < 0.5) {
-          orders.push({ kind: 'train', prov: p.i, owner: id }); ap -= 1; gold -= 5;
-        } else if (ap >= 1 && gold >= 8 && p.dev < 4 && Math.random() < 0.4) {
-          orders.push({ kind: 'build', prov: p.i, owner: id }); ap -= 1; gold -= 8;
+        if (p.garrison < 12 && Math.random() < 0.5 && canAfford(pl, ORDER_COSTS.train)) {
+          pay(pl, ORDER_COSTS.train); orders.push({ kind: 'train', prov: p.i, owner: id });
+        } else if (p.dev < 4 && Math.random() < 0.4 && canAfford(pl, ORDER_COSTS.build)) {
+          pay(pl, ORDER_COSTS.build); orders.push({ kind: 'build', prov: p.i, owner: id });
         }
       }
-      // attack weak adjacent provinces (bias inward in the late game)
+      // strike weak adjacent provinces (bias inward in the late game)
       for (const p of mine) {
-        if (ap < 2 || p.garrison < 5) continue;
+        if (p.garrison < 5 || !canAfford(pl, ORDER_COSTS.march)) continue;
         const targets = state.adj[p.i]
           .map((j) => state.provinces[j])
           .filter((q) => q.owner !== id && !q.dissolved)
           .filter((q) => q.garrison * (lateGame ? 1.2 : 1.4) < p.garrison)
           .sort((a, b) => (lateGame ? a.radius - b.radius : a.garrison - b.garrison));
         if (targets.length) {
-          const q = targets[0];
-          orders.push({ kind: 'march', from: p.i, to: q.i, troops: p.garrison - 2, mode: FACTIONS[id].lean, owner: id });
-          ap -= 2;
+          pay(pl, ORDER_COSTS.march);
+          orders.push({ kind: 'march', from: p.i, to: targets[0].i, troops: p.garrison - 2, mode: FACTIONS[id].lean, owner: id });
         }
       }
-      pl.ap = ap; pl.gold = gold;
     }
     return orders;
   }

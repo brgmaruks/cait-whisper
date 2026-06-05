@@ -1,6 +1,6 @@
 // Rendering: the spiral board (SVG) + the side panel (DOM).
 
-import { FACTIONS, MODES, ORDER_COSTS, GOLDEN_ANGLE, SCALE, CENTER, N_PROVINCES } from './config.js';
+import { FACTIONS, MODES, ORDER_COSTS, GOLDEN_ANGLE, SCALE, CENTER, N_PROVINCES, ELEMENTS, SEASON } from './config.js';
 import { isRevealed } from './state.js';
 
 const SVGNS = 'http://www.w3.org/2000/svg';
@@ -58,6 +58,14 @@ export function renderMap(state, handlers) {
       stroke: p.isEye ? 'var(--eye)' : 'rgba(0,0,0,.45)', 'stroke-width': p.isEye ? 2 : 1.2,
     }));
 
+    // elemental affinity ring
+    if (!p.dissolved && !p.isEye && ELEMENTS[p.element]) {
+      g.appendChild(el('circle', {
+        cx: p.x, cy: p.y, r: rad + 3, fill: 'none',
+        stroke: ELEMENTS[p.element].hex, 'stroke-width': 2, 'stroke-opacity': .85,
+      }));
+    }
+
     if (!p.dissolved) {
       const known = isRevealed(state, p);
       const t = el('text', { x: p.x, y: p.y + 4, class: 'garrison-label' });
@@ -81,13 +89,19 @@ export function renderPanel(state, handlers) {
     <div class="stat-row"><span class="k">Level</span><span class="v">${me.hero.level}</span></div>
     <div class="stat-row"><span class="k">Action Points</span><span class="v" style="color:var(--gold)">${me.ap} / ${me.apMax}</span></div>`;
 
-  // resources
+  // resources — the pentagram of elements
   const res = document.getElementById('resource-block');
   const provs = state.provinces.filter((p) => p.owner === 'you' && !p.dissolved).length;
+  const elemRows = ['air', 'fire', 'earth', 'water'].map((k) => {
+    const e = ELEMENTS[k];
+    const tag = k === SEASON.waxes ? ' <span style="color:var(--f-egypt)">▲</span>'
+      : k === SEASON.wanes ? ' <span style="color:var(--coral)">▼</span>' : '';
+    return `<div class="stat-row"><span class="k"><span style="color:${e.hex}">${e.sym}</span> ${e.name}${tag}</span><span class="v">${Math.floor(me.res[k])}</span></div>`;
+  }).join('');
   res.innerHTML = `
-    <h3>Dominion</h3>
-    <div class="stat-row"><span class="k">Gold</span><span class="v">${me.gold}</span></div>
-    <div class="stat-row"><span class="k">Aether</span><span class="v" style="color:var(--f-orphic)">${me.aether}</span></div>
+    <h3>Dominion · ${SEASON.name} (Fire ▲ Water ▼)</h3>
+    ${elemRows}
+    <div class="stat-row"><span class="k"><span style="color:${ELEMENTS.aether.hex}">✶</span> Aether <span class="cost">→ hero</span></span><span class="v" style="color:${ELEMENTS.aether.hex}">${me.aether}</span></div>
     <div class="stat-row"><span class="k">Provinces</span><span class="v">${provs}</span></div>`;
 
   renderSelection(state, handlers);
@@ -113,6 +127,7 @@ function renderSelection(state, handlers) {
     <div class="stat-row"><span class="k">Holder</span><span class="v" style="color:${p.owner ? FACTIONS[p.owner].hex : 'var(--muted)'}">${ownerName}</span></div>
     <div class="stat-row"><span class="k">Garrison</span><span class="v">${known ? p.garrison : 'unknown'}</span></div>
     <div class="stat-row"><span class="k">Development</span><span class="v">${p.dev}</span></div>
+    <div class="stat-row"><span class="k">Element</span><span class="v" style="color:${ELEMENTS[p.element]?.hex || 'var(--muted)'}">${ELEMENTS[p.element]?.sym || ''} ${ELEMENTS[p.element]?.name || '—'}</span></div>
     <div class="stat-row"><span class="k">Ring</span><span class="v">${p.ring}${p.isEye ? ' · centre' : ''}</span></div>`;
 
   if (p.dissolved) { ord.innerHTML = `<p class="muted">Claimed by the Dissolution.</p>`; return; }
